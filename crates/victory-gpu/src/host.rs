@@ -5972,7 +5972,16 @@ pub(crate) fn copy_mapped(dst: *mut u8, src: *const u8, len: usize, title_dst: b
     }
     #[cfg(feature = "diagnostics")]
     let moved = std::time::Instant::now();
-    let whole = read(src, dst, len);
+    // Into host memory the copy runs in user mode (`crate::title_copy`, no
+    // system call; a fault on one of its own reads returns false); into
+    // title memory through the kernel, which must see the destination.
+    // A page that cannot be read fails either way and is found below.
+    let whole = if title_dst || !crate::title_copy::enabled() {
+        read(src, dst, len)
+    } else {
+        // SAFETY: the destination is host memory of `len` bytes.
+        unsafe { crate::title_copy::copy(dst, src, len) }
+    };
     #[cfg(feature = "diagnostics")]
     crate::copystat::add(crate::copystat::C::MoveUs, moved.elapsed().as_micros() as u64);
     if whole {
