@@ -31,6 +31,16 @@ set VICTORY_JOIN_PARTS=1
 set VICTORY_BACK_OWN_VIEW=1
 rem victory-fork 465b94f: scattered indirect records clamped once per list
 set VICTORY_INDIRECT_GATHER=1
+rem fills of upload memory on several threads (city 2.4-3.1 -> 4.3-5.1 fps with the merges and LTO)
+set VICTORY_WIDE_FILL=1
+rem NEW in this build, testing: VItoriaBr v19 preset (late-written textures uploaded again: black skin and ground; table buffers)
+set VICTORY_PAGE_WRITES=slots
+set VICTORY_TABLE_BUFFERS=1
+set VICTORY_UNWATCHED_FRAMES=4
+rem water textures copied back (boat floats): off by default since fxceless PR 999
+set VICTORY_TEXTURE_BACK=1
+rem NEW, testing: rays miss while no structure is built (sky light instead of black bounce light; vx-layer, after Flamingo)
+set VICTORY_BVH_MISS=1
 if "%1"=="warm" (
   target\release\victory.exe warm --jobs 16 "%GAME%\shaders.rpf"
   goto :eof
