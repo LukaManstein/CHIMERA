@@ -91,10 +91,11 @@ pub const USER_DISPATCH_THREADS_X: u32 = 0x104;
 
 /// `ShaderFlags` bits (metadata) and their `SFI0` feature bits.
 pub(crate) mod flags {
-    pub const RAW_BUFFERS: u64 = 1 << 4;
     pub const DOUBLES: u64 = 1 << 2;
+    pub const RAW_BUFFERS: u64 = 1 << 4;
     pub const STENCIL_REF: u64 = 1 << 11;
     pub const TYPED_UAV_LOADS: u64 = 1 << 13;
+    pub const ROVS: u64 = 1 << 18;
     pub const WAVE_OPS: u64 = 1 << 19;
     pub const BARYCENTRICS: u64 = 1 << 22;
     pub const INT64: u64 = 1 << 20;
@@ -102,7 +103,6 @@ pub(crate) mod flags {
     pub const ATOMIC_HEAP64: u64 = 1 << 32;
     pub const RESOURCE_HEAP: u64 = 1 << 30;
     pub const SAMPLER_HEAP: u64 = 1 << 31;
-    pub const ROVS: u64 = 1 << 18;
 }
 
 pub(crate) struct Types {
@@ -181,6 +181,9 @@ pub(crate) struct Shader {
     pub flags: u64,
     /// Every UAV the shader opens is rasterizer ordered ([`Self::annotate`]).
     pub rov: bool,
+    /// A pixel shader whose writes to views the console orders by primitive (POPS): its
+    /// heap views written or read as UAVs are rasterizer-ordered views.
+    pub ordered: bool,
     /// Heap handles made with a non-uniform index.
     pub nonuniform_handles: u32,
     /// A compute shader with this thread-group size.
@@ -241,6 +244,7 @@ impl Shader {
             writes_guest_memory: false,
             flags: 0,
             rov: false,
+            ordered: false,
             nonuniform_handles: 0,
             threads: None,
             wave_size: None,
@@ -529,6 +533,13 @@ impl Shader {
         } else {
             flags::RESOURCE_HEAP
         };
+        // (bit 12 of the kind field: a UAV; bit 13: rasterizer-ordered)
+        let props = if (self.ordered || self.rov) && !sampler && props.0 & 0x1000 != 0 {
+            self.flags |= flags::ROVS;
+            (props.0 | 0x2000, props.1)
+        } else {
+            props
+        };
         self.nonuniform_handles += u32::from(nonuniform);
         let (s, n) = (self.m.bool(sampler), self.m.bool(nonuniform));
         let h = self.op(
@@ -555,8 +566,9 @@ impl Shader {
             let used = self.m.usage();
             for (flag, used) in [
                 (flags::WAVE_OPS, used.wave_ops),
-                (flags::ROVS, used.rov),
+                (flags::ROVS, used.rov || used.rovs),
                 (flags::INT64, used.int64),
+                (flags::DOUBLES, used.doubles),
                 (flags::TYPED_UAV_LOADS, used.typed_uav_loads),
                 (flags::RESOURCE_HEAP, used.heap_views),
                 (flags::SAMPLER_HEAP, used.heap_samplers),
