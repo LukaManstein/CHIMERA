@@ -55,7 +55,50 @@ scripts\chimera-turbo.cmd warm
 scripts\chimera-turbo.cmd
 ```
 
-## Branch `turbo` (newest, recommended)
+## Newest: branch `next-nvidia` / `turbo-next` (2026-11-26)
+
+**Measured on a 2018 CPU: median 4.9 fps on the first boat mission at ~6,200 draws a frame**
+(p90 5.5, peaks 6.2–7.5), an 18-minute session with no crash or device removal, sound without crackles.
+The PC: **AMD Ryzen 7 2700** (8 cores, Zen+, 2018), DDR4 at 2400, 32 GB RAM, **NVIDIA RTX 3080 Ti**,
+Windows 10 LTSC; Series X profile, 1280×720, every switch in `scripts/chimera-turbo.cmd`.
+Same mission and PC on `turbo` (2026-11-25): median 3.9 fps at ~3,600 draws.
+All numbers are the layer's own frame lines (`VICTORY_FRAME_LOG=1`), the first quarter of each session left out.
+
+What is new since `turbo`:
+
+| Change | From | Effect here |
+|---|---|---|
+| Upload fills copied on several threads (`VICTORY_WIDE_FILL`), thin LTO | LukaManstein (LTO: Key) | city 2.4–3.1 → 4.3–5.1 fps |
+| Late-written placed textures uploaded again (`VICTORY_PAGE_WRITES=slots`), table buffers (`VICTORY_TABLE_BUFFERS`) | [VItoriaBr](https://github.com/uiliannn/VItoriaBr) v19 (uiliannn, ports from myokex/victory-amd) | **skin and ground textures are back** (were black) |
+| Rays miss while no structure is built (`VICTORY_BVH_MISS`) | [Geckomacabre/vx-layer](https://github.com/Geckomacabre/vx-layer) `bdef933`, after Flamingo | shadowed areas lit by the sky instead of black |
+| Water texture copy-back with allocation tickets (`VICTORY_TEXTURE_BACK=1`) | [fxceless/victory-fork](https://github.com/fxceless/victory-fork) PR #999 (cxy0072019-sketch, after Geckomacabre) | the boat floats |
+| XMA decoder thread at time-critical priority (`VICTORY_XMA_PRIORITY`) | LukaManstein | **audio crackles gone** with 12 pipeline workers busy |
+| Card room released after 20 s idle, texture read-back skips XOR layouts, own copies of misaligned raw views | LukaManstein | black textures on 12 GB cards fixed |
+| `VICTORY_WRITE_STATS`, `VICTORY_WIDE_HEAP`, `VICTORY_SKIP_PIPELINES` in release builds | LukaManstein | measuring tools: copy-back is mostly character skinning (needed), the heap mirror on threads gave no measurable gain |
+
+Known wrong in this build: horizontal stripes on sunlit characters and seats (the adaptive shadow-ray compute
+pass is one of the 196 shaders that do not translate yet; a fix is being integrated), a checker pattern on
+some boat hulls, the sun disc drawn black when looked at, dark water when facing the sun.
+
+### Compared with the top of the [PortWatch](https://portwatch-vi.xyz) board
+
+Each team's own numbers, **each on its own PC** (not measured here). The layer is bound by the CPU and memory
+copies, not the graphics card, so the CPU matters most when comparing.
+
+| Build | Frame rate in the world | CPU | GPU | Code |
+|---|---|---|---|---|
+| **CHIMERA `next-nvidia`** | **4.9 fps median** on the boat mission, ~6,200 draws | Ryzen 7 2700 (2018) | RTX 3080 Ti | open, GPL |
+| [AvatarManz](https://github.com/avatarmanz/VIctory-7900XTX) | ~16 average (PortWatch), 19–22 on the boat mission (README) | i9-12900K | RX 7900 XTX | open, GPL |
+| [Belobug](https://github.com/Belobug/VIctory-Belobug-AMD) | ~4 fps (PortWatch) | Ryzen 7 9800X3D | RX 9070 XT | open, GPL |
+| [VItoriaBr](https://github.com/uiliannn/VItoriaBr) | up to 4 on stream (PortWatch), 5.8 in 4K (README) | not stated | RTX 5060 Ti | open, GPL |
+| [LNX-victory](https://github.com/Linox-IDK/LNX-victory) | 3.3–4.6 (Series X), 7–8 (Series S + FSR) | not stated | RTX 5060 Ti 8 GB | open, GPL |
+| darkworldhm | 12–15, 5 to 24 (stream) | not stated | not stated | closed |
+
+AvatarManz is clearly ahead: it records the title's list calls and translates them on eight threads of its own
+(`VICTORY_THIN`). It is being built and measured on this PC next; if it holds up on an NVIDIA card, CHIMERA
+will move onto it and keep its own Windows 10, audio, texture and launcher work on top.
+
+## Branch `turbo`
 
 > **2026-11-25: playable (slowly) — the boat chase of "Gone Fishing" played through** — the boat floats and is driven from the handover
 > to Jason on foot at the camp, in a 31-minute session without a crash, on an RTX 3080 Ti under **Windows 10**
