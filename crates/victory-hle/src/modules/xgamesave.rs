@@ -303,6 +303,17 @@ fn commit(
     step();
     std::fs::rename(&staged, dir.join(format!("v{number}")))?;
     step();
+    // Every save written, so a run's log says when the title saved and
+    // what (story saves are the `SARC*` containers; `Player` is written
+    // often).
+    let bytes: usize = blobs
+        .iter()
+        .map(|(_, s)| match s {
+            Source::Data(d) => d.len(),
+            Source::Kept(_) => 0,
+        })
+        .sum();
+    tracing::info!(container = name, version = number, blobs = blobs.len(), new_bytes = bytes, "game save written");
     Ok(())
 }
 
