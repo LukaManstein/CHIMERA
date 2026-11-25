@@ -1952,6 +1952,22 @@ impl HostHeap {
         from: usize,
         page: &[u8],
     ) -> (u64, u64) {
+        let (looked, due) = self.copied_page_due(slots, (start, step), from, page);
+        for &(index, handle) in &due {
+            self.mirror(index, handle, false);
+        }
+        (looked, due.len() as u64)
+    }
+
+    /// As [`HostHeap::mirror_copied_page`], but the slots due (index,
+    /// handle) are returned for the caller to mirror, on whichever threads.
+    pub(crate) fn copied_page_due(
+        &self,
+        slots: std::ops::Range<u64>,
+        (start, step): (u64, u64),
+        from: usize,
+        page: &[u8],
+    ) -> (u64, Vec<(u32, u64)>) {
         let (frame, tables) = (crate::frame::current(), sync_tables());
         let mut looked = 0u64;
         let mut due: Vec<(u32, u64)> = Vec::new();
@@ -1992,10 +2008,7 @@ impl HostHeap {
                 due.push((index as u32, handle));
             }
         }
-        for &(index, handle) in &due {
-            self.mirror(index, handle, false);
-        }
-        (looked, due.len() as u64)
+        (looked, due)
     }
 
     /// Makes host slot `index` from the record the title has at `handle`

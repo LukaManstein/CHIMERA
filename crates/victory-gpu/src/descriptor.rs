@@ -188,6 +188,10 @@ pub(crate) fn sync_heaps() {
     let started = std::time::Instant::now();
     let (mut pages, mut looked, mut mirrored) = (0u64, 0u64, 0u64);
     let mut page_bytes: Vec<u8> = Vec::new();
+    // With `wide_heap_sync`: the slots due on every page, by host heap,
+    // mirrored together on several threads once all pages are read.
+    let wide = wide_heap_sync();
+    let mut due_all: Vec<(usize, Vec<(u32, u64)>)> = Vec::new();
     let _one = SYNCING.lock().unwrap_or_else(|e| e.into_inner());
     let heaps = SHADER_HEAPS.read().unwrap_or_else(|e| e.into_inner());
     for &(start, end, at) in heaps.iter() {
@@ -217,7 +221,15 @@ pub(crate) fn sync_heaps() {
                     // The page's records in one go, under one lock
                     // (`HostHeap::mirror_copied_page`); one by one below
                     // with `VICTORY_HEAP_SYNC_PAGE=0`.
-                    let slots = if page_at_once() {
+                    let slots = if wide && page_at_once() {
+                        let (seen, due) = host.copied_page_due(slots, (start, step), from, &page_bytes);
+                        looked += seen;
+                        mirrored += due.len() as u64;
+                        if !due.is_empty() {
+                            due_all.push((host as *const host::HostHeap as usize, due));
+                        }
+                        0..0
+                    } else if page_at_once() {
                         let (seen, made) = host.mirror_copied_page(slots, (start, step), from, &page_bytes);
                         looked += seen;
                         mirrored += made;
@@ -247,11 +259,72 @@ pub(crate) fn sync_heaps() {
             }
         }
     }
+    if !due_all.is_empty() {
+        mirror_wide(due_all);
+    }
+    // Held until the mirrors above are done: no heap is let go under them.
     drop(heaps);
     for (count, n) in SYNCED.iter().zip([pages, looked, mirrored, started.elapsed().as_micros() as u64]) {
         count.fetch_add(n, Relaxed);
     }
 }
+
+/// Whether [`sync_heaps`] makes the host slots of changed records on
+/// several threads (`VICTORY_WIDE_HEAP=1`; off by default).
+///
+/// A profile in the world had it at 22 ms a frame on the submitting thread,
+/// some 8,000 slots made a frame (about 2.7 us each, the view's making on
+/// the host). Each slot is its own: slots are made from title threads at
+/// the same time already (`Create*View` calls), so pieces of a few hundred
+/// go to the `victory-wide-N` threads, the heaps kept alive by the lock
+/// `sync_heaps` holds until all are done.
+#[cfg(windows)]
+fn wide_heap_sync() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        let on = std::env::var_os("VICTORY_WIDE_HEAP").is_some_and(|v| v == "1");
+        if on {
+            tracing::info!("descriptor records copied as bytes are mirrored on several threads (VICTORY_WIDE_HEAP=1)");
+        }
+        on
+    })
+}
+
+/// Makes the host slots `due` (host heap, (index, handle)s): here when
+/// they are few, else in pieces on several threads. The caller holds the
+/// heaps' lock until this returns.
+#[cfg(windows)]
+fn mirror_wide(due: Vec<(usize, Vec<(u32, u64)>)>) {
+    const PIECE: usize = 256;
+    let total: usize = due.iter().map(|d| d.1.len()).sum();
+    let make = |host: usize, slots: &[(u32, u64)]| {
+        // SAFETY: a host heap of a registered heap, alive while the
+        // caller holds `SHADER_HEAPS`.
+        let host = unsafe { &*(host as *const host::HostHeap) };
+        for &(index, handle) in slots {
+            host.mirror(index, handle, false);
+        }
+    };
+    if total < 2 * PIECE {
+        for (host, slots) in &due {
+            make(*host, slots);
+        }
+        return;
+    }
+    let mut jobs: Vec<Box<dyn FnOnce() + Send>> = Vec::new();
+    for (host, slots) in due {
+        for piece in slots.chunks(PIECE) {
+            let piece = piece.to_vec();
+            jobs.push(Box::new(move || make(host, &piece)));
+        }
+    }
+    WIDE_HEAP_PIECES.fetch_add(jobs.len() as u64, std::sync::atomic::Ordering::Relaxed);
+    crate::shadow::wide_run(jobs);
+}
+
+/// Pieces of [`mirror_wide`] run on several threads since the start.
+#[cfg(windows)]
+static WIDE_HEAP_PIECES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Since the last frame line, of [`sync_heaps`]: changed pages of placed
 /// shader-visible heaps looked at, slots on them, slots whose record was
