@@ -1,3 +1,6 @@
+> **This is the old CHIMERA base (victory-fork, 2026-11-24), kept for reference.** The current builds are on branches
+> [`stable-nvidia`](https://github.com/LukaManstein/CHIMERA/tree/stable-nvidia) and [`next-nvidia`](https://github.com/LukaManstein/CHIMERA/tree/next-nvidia); see the [main README](https://github.com/LukaManstein/CHIMERA).
+
 <p align="center">
   <img src="docs/assets/chimera-banner.svg" alt="CHIMERA" width="100%">
 </p>
@@ -7,7 +10,6 @@
   <img alt="Language: Rust" src="https://img.shields.io/badge/rust-stable-ff9a3c">
   <img alt="Platform: Windows 10/11" src="https://img.shields.io/badge/windows-10%20%7C%2011-ff4d8d">
   <img alt="Status: work in progress" src="https://img.shields.io/badge/status-work%20in%20progress-555">
-  <a href="https://t.me/+rL9uLOqRWck2ZDMx"><img alt="Telegram" src="https://img.shields.io/badge/telegram-join-26A5E4?logo=telegram&logoColor=white"></a>
 </p>
 
 **CHIMERA** runs an Xbox Series title natively on Windows, from files you
@@ -101,7 +103,6 @@ upstream list, including debugging aids, is in
 
 ## Community
 
-News, builds-from-source help and progress videos: **[Telegram](https://t.me/+rL9uLOqRWck2ZDMx)**.
 Bugs go to [Issues](https://github.com/LukaManstein/CHIMERA/issues) (use the form).
 Never post game files, keys, executables or links to them — anywhere.
 
