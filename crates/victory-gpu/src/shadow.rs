@@ -3025,6 +3025,7 @@ impl Shadow {
             return;
         }
         let len = len.min(self.left(address));
+        crate::writestats::wrote(len);
         list.defer_gpu_write(self, address as usize, len as usize);
     }
 
