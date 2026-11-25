@@ -2170,9 +2170,16 @@ impl State {
         else {
             return;
         };
-        let Some(stage) = p.stages.first().filter(|s| &s.shader.hash == hash) else {
+        // A comma-separated list: the first is the height look-ups (whose
+        // results `water_copy` follows), the others are only logged.
+        let Some(stage) = p.stages.first().filter(|s| hash.split(',').any(|h| h.trim() == s.shader.hash)) else {
             return;
         };
+        let first_hash = hash.split(',').next().unwrap_or_default().trim() == stage.shader.hash;
+        if !first_hash {
+            self.watch_other(stage);
+            return;
+        }
         // Every dispatch: where its results go, and on which list, for
         // `water_copy` to tell copies of them apart.
         WATER_LIST.store(std::ptr::from_ref(list) as u64, Ordering::Relaxed);
@@ -2233,6 +2240,51 @@ impl State {
                 hi,
                 first = ?&floats[..n.min(8)],
                 "water watch: what the height look-ups' results hold in title memory"
+            );
+        }
+    }
+
+    /// Diagnostics: a watched program other than the height look-ups: at
+    /// most once a second per program, what its unordered views' title
+    /// memory holds now (the first 16 dwords, as integers and as floats).
+    fn watch_other(&self, stage: &crate::pipeline::host::Stage) {
+        static LAST: std::sync::Mutex<Vec<(String, u64, u64)>> = std::sync::Mutex::new(Vec::new());
+        let now = crate::host::now_ms();
+        {
+            let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+            match last.iter_mut().find(|(h, ..)| *h == stage.shader.hash) {
+                Some((_, t, n)) => {
+                    *n += 1;
+                    if now < *t + 1000 {
+                        return;
+                    }
+                    *t = now;
+                }
+                None => last.push((stage.shader.hash.clone(), now, 1)),
+            }
+        }
+        for u in stage.translated().used.iter().filter(|u| u.kind == ResourceType::Uav && u.root == RootType::Table) {
+            let Some(Root::Table(table)) = self.roots_ref(true).get(usize::from(u.slot)) else {
+                continue;
+            };
+            let view = crate::descriptor::view(table + u64::from(u.table_offset_dwords) * 4);
+            let Some((address, len)) = view.as_ref().and_then(crate::descriptor::host::buffer_range) else {
+                tracing::info!(hash = %stage.shader.hash, slot = u.slot, offset = u.table_offset_dwords, view = view.is_some(), "water watch: a watched program's unordered view that is no buffer");
+                continue;
+            };
+            let n = (len.min(64) / 4) as usize;
+            let mut words = vec![0u32; n];
+            crate::host::copy_mapped(words.as_mut_ptr().cast(), address as *const u8, n * 4, false);
+            let floats: Vec<f32> = words.iter().map(|&w| f32::from_bits(w)).collect();
+            tracing::info!(
+                hash = %stage.shader.hash,
+                slot = u.slot,
+                offset = u.table_offset_dwords,
+                address = format_args!("{address:#x}"),
+                len,
+                words = ?words,
+                floats = ?floats,
+                "water watch: what a watched program's results hold in title memory"
             );
         }
     }
