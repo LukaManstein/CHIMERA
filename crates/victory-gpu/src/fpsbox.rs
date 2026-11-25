@@ -113,7 +113,7 @@ fn hud_lines(
     gpu: &str,
 ) -> Vec<String> {
     let line1 = format!(
-        "VITORIABR | {}.{} FPS | {} MS | {} DRAWS",
+        "CHIMERA X VITORIABR | {}.{} FPS | {} MS | {} DRAWS",
         tenths / 10,
         tenths % 10,
         ms,
@@ -361,7 +361,7 @@ mod tests {
     #[test]
     fn hud_lines_format_metrics_and_gpu() {
         let lines = hud_lines(48, 208, 3916, (1920, 1080), Some(11_674), "RTX 5060 TI");
-        assert_eq!(lines[0], "VITORIABR | 4.8 FPS | 208 MS | 3916 DRAWS");
+        assert_eq!(lines[0], "CHIMERA X VITORIABR | 4.8 FPS | 208 MS | 3916 DRAWS");
         assert_eq!(lines[1], "1920X1080 | VRAM 11.4 GB | RTX 5060 TI");
     }
 
