@@ -1,5 +1,5 @@
 @echo off
-rem CHIMERA turbo: the launch profile the Chapter 1 recording was made with.
+rem CHIMERA turbo: the launch profile of branch turbo-next (see docs/CHIMERA.md).
 rem Set GAME to the folder of your own copy of the title, then run from the repository root
 rem after `cargo build --release -p victory` and `cargo xtask agility` (Windows 10).
 if "%GAME%"=="" set GAME=%~dp0..\game
@@ -12,7 +12,9 @@ set VICTORY_MERGE_RUNS=4096
 set VICTORY_LATE_WAIT=3
 set VICTORY_WIDE_BACK=1
 set VICTORY_CARD_BUFFERS_MIN_MB=1
-set VICTORY_CARD_BUFFERS_MB=4096
+set VICTORY_CARD_BUFFERS_MB=1024
+rem leave the card's memory to textures on 8-12 GB cards (they drew black otherwise)
+set VICTORY_CARD_ROOM_FOR_TARGETS_MB=2048
 set VICTORY_WIDE_REFRESH=1
 set VICTORY_WIDE_MERGE=1
 set VICTORY_JOIN_COPIES=1
@@ -22,9 +24,13 @@ set VICTORY_DISPLAY_MODE=1280x720
 set VICTORY_AMBIENT=0.6
 rem title-memory copies in user mode (victory-fork 0b0074e)
 set VICTORY_COPY_PLAIN=1
+rem victory-fork 3973179: one submission for parts in a row, copy-back through our own view
+set VICTORY_JOIN_PARTS=1
+set VICTORY_BACK_OWN_VIEW=1
 if "%1"=="warm" (
   target\release\victory.exe warm --jobs 16 "%GAME%\shaders.rpf"
   goto :eof
 )
-for %%f in ("%GAME%\*.exe") do set EXE=%%f
+set EXE=%GAME%\game_scarlett_master.exe
+if not exist "%EXE%" for %%f in ("%GAME%\*.exe") do set EXE=%%f
 target\release\victory.exe run "%EXE%" --execute
