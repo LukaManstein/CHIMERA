@@ -3391,11 +3391,12 @@ impl State {
         const INDEXED: u32 = 1;
         const DISPATCH: u32 = 2;
         const MESH: u32 = 10;
-        #[cfg(feature = "diagnostics")]
-        let why = |what: &str| crate::pipeline::note_why(format!("indirect kind {kind}: {what}"));
-        #[cfg(not(feature = "diagnostics"))]
         let this_pipeline = self.pipeline as This;
-        let why = move |what: &str| indirect_why(this_pipeline, kind, what);
+        let why = move |what: &str| {
+            #[cfg(feature = "diagnostics")]
+            crate::pipeline::note_why(format!("indirect kind {kind}: {what}"));
+            indirect_why(this_pipeline, kind, what);
+        };
         let Some(p) = crate::pipeline::host_pipeline(self.pipeline as This) else {
             #[cfg(feature = "diagnostics")]
             crate::pipeline::note_drop(self.pipeline as This);
