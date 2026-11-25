@@ -3126,10 +3126,12 @@ impl State {
         #[cfg(feature = "diagnostics")]
         let why = |what: &str| crate::pipeline::note_why(format!("indirect kind {kind}: {what}"));
         #[cfg(not(feature = "diagnostics"))]
-        let why = |_: &str| {};
+        let this_pipeline = self.pipeline as This;
+        let why = move |what: &str| indirect_why(this_pipeline, kind, what);
         let Some(p) = crate::pipeline::host_pipeline(self.pipeline as This) else {
             #[cfg(feature = "diagnostics")]
             crate::pipeline::note_drop(self.pipeline as This);
+            indirect_why(self.pipeline as This, kind, "no host pipeline");
             return false;
         };
         // Indirect rectangles (the title's tiled lighting, 256
@@ -3707,4 +3709,22 @@ pub(crate) fn water_copy(what: &'static str, list: u64, dst: u64, src: u64, len:
         copies_on_other_lists = other,
         "water watch: a title copy reads the height look-ups' results"
     );
+}
+
+/// `VICTORY_WHY_INDIRECT=1`: an indirect execution dropped, with its
+/// pipeline's shader hashes and the reason, once per (pipeline, reason).
+#[cfg(windows)]
+fn indirect_why(pipeline: This, kind: u32, what: &str) {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if !*ON.get_or_init(|| std::env::var_os("VICTORY_WHY_INDIRECT").is_some_and(|v| v == "1")) {
+        return;
+    }
+    static SEEN: std::sync::Mutex<Vec<(usize, String)>> = std::sync::Mutex::new(Vec::new());
+    let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
+    let key = (pipeline as usize, what.to_owned());
+    if seen.contains(&key) {
+        return;
+    }
+    seen.push(key);
+    tracing::info!(kind, why = what, pipeline = %crate::pipeline::describe(pipeline), "indirect execution dropped: why");
 }

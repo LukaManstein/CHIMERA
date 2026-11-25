@@ -448,6 +448,21 @@ fn parse_skip_hashes(value: &str) -> Vec<String> {
         .collect()
 }
 
+/// Diagnostics in any build: the hashes of `this`'s shaders and, if it has
+/// no host pipeline, why (being made, which shader failed, or refused).
+#[cfg(windows)]
+pub(crate) fn describe(this: This) -> String {
+    if this.is_null() {
+        return "no pipeline set".to_owned();
+    }
+    let p = pipeline(this);
+    let hashes: Vec<&str> = p.shaders.iter().map(|s| s.hash.as_str()).collect();
+    match make::missing(&p.host) {
+        Some(why) => format!("{} ({why})", hashes.join("+")),
+        None => hashes.join("+"),
+    }
+}
+
 #[cfg(all(windows, feature = "diagnostics"))]
 fn skipped_shader(p: &Pipeline) -> Option<&str> {
     static HASHES: OnceLock<Vec<String>> = OnceLock::new();
