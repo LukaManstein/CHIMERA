@@ -209,7 +209,39 @@ pub(crate) fn card_room_kept() -> u64 {
     if !card_room_kept_on() || !cards() {
         return 0;
     }
+    // The copies come in a burst while a world loads. Once none has been
+    // asked for in a while the room is given to the textures: it was kept
+    // for the rest of the run before, and with a limit the burst did not
+    // fill (4,096 MB here, 1,000-odd MB of copies) a 12 GB card left the
+    // texture queue some 4 GB, so thousands of textures waited and drew
+    // black (`VICTORY_CARD_ROOM_IDLE_S`, 20 by default; 0: kept for good,
+    // as before). A copy asked for later takes room as a texture would.
+    let idle = card_room_idle_ms();
+    let last = CARD_ASKED.load(Ordering::Relaxed);
+    if idle > 0 && last > 0 && crate::host::now_ms() > last + idle {
+        return 0;
+    }
     card_limits().1.saturating_sub(CARD_BYTES[0].load(Ordering::Relaxed) + CARD_REFUSED[1].load(Ordering::Relaxed))
+}
+
+/// When a card copy of a title buffer was last asked for
+/// ([`crate::host::now_ms`]; 0: never).
+static CARD_ASKED: AtomicU64 = AtomicU64::new(0);
+
+/// How long without a card copy asked for before its room is no longer
+/// kept ([`card_room_kept`]), in milliseconds; 0: kept for good.
+fn card_room_idle_ms() -> u64 {
+    static MS: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *MS.get_or_init(|| {
+        let s = std::env::var("VICTORY_CARD_ROOM_IDLE_S")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .unwrap_or(20);
+        if s > 0 {
+            tracing::info!(seconds = s, "room kept for card copies of title buffers is given to textures after this long without one asked for (VICTORY_CARD_ROOM_IDLE_S)");
+        }
+        s * 1000
+    })
 }
 
 /// The copies in the card's memory.
@@ -256,6 +288,7 @@ fn card_for(size: u64) -> Option<ID3D12Resource> {
     if !host.card_ready() {
         return None;
     }
+    CARD_ASKED.store(crate::host::now_ms().max(1), Ordering::Relaxed);
     // Only while the card has room: with this copy on it, a fifth of the
     // budget the system gives us must still be free. Copies are made when
     // the world loads, before the textures fill the card; the texture
