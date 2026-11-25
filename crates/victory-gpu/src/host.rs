@@ -6964,7 +6964,25 @@ impl HostList {
     fn run_deferred(&self, batch: &mut Batch) {
         #[cfg(feature = "diagnostics")]
         use crate::copystat::{C, add};
+        // Fills in a row (`wide_fill`): copied together on several threads
+        // before any other step runs, so every other step still finds them
+        // done, in the order recorded.
+        let mut fills: Vec<(usize, usize, usize)> = Vec::new();
+        let wide = wide_fill();
         for step in &self.deferred().copies {
+            if wide {
+                if let &Step::Fill(dst, src, len) = step {
+                    #[cfg(feature = "diagnostics")]
+                    {
+                        add(C::Copies, 1);
+                        add(C::CopyBytes, len as u64);
+                        fill_check::runs(src, len);
+                    }
+                    fills.push((dst, src, len));
+                    continue;
+                }
+                run_fills(&mut fills);
+            }
             let started = std::time::Instant::now();
             let copied = match step {
                 &Step::Copy(dst, src, len) => {
@@ -7044,8 +7062,84 @@ impl HostList {
             preparing(0, started.elapsed().as_micros() as u64);
             preparing(1, copied as u64);
         }
+        run_fills(&mut fills);
     }
 }
+
+/// Whether a submission's fills in a row (title memory into the list's
+/// upload memory) are copied on several threads (`VICTORY_WIDE_FILL=1`;
+/// off by default).
+///
+/// A profile of a submission on a Ryzen 7 2700 (eight cores) had its
+/// preparing at 108 ms of a 165 ms frame, the copies 85 ms of it, all on
+/// the submitting thread while the `victory-wide-N` threads stood still
+/// 97 % of the time. A fill reads title memory and writes memory of ours
+/// that no other step touches, so fills in a row do not depend on one
+/// another; anything else in between waits until they are all done.
+fn wide_fill() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| {
+        let on = std::env::var_os("VICTORY_WIDE_FILL").is_some_and(|v| v == "1");
+        if on {
+            tracing::info!("fills of upload memory in a row are copied on several threads (VICTORY_WIDE_FILL=1)");
+        }
+        on
+    })
+}
+
+/// Fills taken in a row ([`wide_fill`]), done before the next step: on
+/// several threads in pieces of about a megabyte when there is enough of
+/// them, else here. Counted as the frame line's copies.
+fn run_fills(fills: &mut Vec<(usize, usize, usize)>) {
+    if fills.is_empty() {
+        return;
+    }
+    let started = std::time::Instant::now();
+    let fills = std::mem::take(fills);
+    let bytes: usize = fills.iter().map(|f| f.2).sum();
+    const PIECE: usize = 1 << 20;
+    if bytes < PIECE / 2 {
+        for (dst, src, len) in fills {
+            copy_mapped(dst as *mut u8, src as *const u8, len, false);
+        }
+    } else {
+        let mut jobs: Vec<Box<dyn FnOnce() + Send>> = Vec::new();
+        let mut group: Vec<(usize, usize, usize)> = Vec::new();
+        let mut in_group = 0;
+        for (dst, src, len) in fills {
+            let mut at = 0;
+            while at < len {
+                let n = (PIECE - in_group).min(len - at);
+                group.push((dst + at, src + at, n));
+                at += n;
+                in_group += n;
+                if in_group >= PIECE {
+                    let g = std::mem::take(&mut group);
+                    jobs.push(Box::new(move || {
+                        for (d, s, n) in g {
+                            copy_mapped(d as *mut u8, s as *const u8, n, false);
+                        }
+                    }));
+                    in_group = 0;
+                }
+            }
+        }
+        if !group.is_empty() {
+            jobs.push(Box::new(move || {
+                for (d, s, n) in group {
+                    copy_mapped(d as *mut u8, s as *const u8, n, false);
+                }
+            }));
+        }
+        WIDE_FILLS.fetch_add(jobs.len() as u64, Ordering::Relaxed);
+        crate::shadow::wide_run(jobs);
+    }
+    preparing(0, started.elapsed().as_micros() as u64);
+    preparing(1, bytes as u64);
+}
+
+/// Pieces of fills copied on several threads since the start.
+static WIDE_FILLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Whether a submission's refreshes of host copies run on several threads,
 /// a copy to a thread (`VICTORY_WIDE_REFRESH=1`; off by default).
