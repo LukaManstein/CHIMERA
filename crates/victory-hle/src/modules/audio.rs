@@ -19,6 +19,7 @@
 use std::alloc::Layout;
 use std::collections::{BTreeMap, VecDeque};
 use std::ffi::c_void;
+use std::sync::atomic::Ordering::Relaxed;
 use std::sync::{Mutex, MutexGuard, OnceLock, RwLock, RwLockReadGuard};
 use std::time::Instant;
 
@@ -414,6 +415,12 @@ impl Xma {
             return;
         };
         let mut slot = lock(&self.voices[index as usize]);
+        STATS.enables.fetch_add(1, Relaxed);
+        // An overlap buffer means a voice continued from a context before
+        // it: decoding from a cold state here drops the overlap at the seam.
+        if context.get(8) != 0 {
+            STATS.cold_seams.fetch_add(1, Relaxed);
+        }
         context.set_field(2, 26, 6, 0);
         tracing::debug!(
             index,
@@ -476,8 +483,24 @@ impl Xma {
         // The decoder writes the same words.
         let mut slot = lock(&self.voices[index as usize]);
         let size = context.field(0, 22, 5).max(1);
+        // Blocks ready for the title: all of them when the ring is full
+        // (not writable), else those from its read block to our write block.
+        // None while the voice still has input means we fell behind: the
+        // mixer plays silence there, which is heard as a crackle.
+        let old_read = context.field(9, 0, 5);
+        let ready = if context.field(1, 31, 1) == 0 {
+            size
+        } else {
+            (context.field(0, 27, 5) + size - old_read) % size
+        };
+        if slot.as_ref().is_some_and(|v| !v.ended) {
+            STATS.takes.fetch_add(1, Relaxed);
+            if ready == 0 {
+                STATS.dry_takes.fetch_add(1, Relaxed);
+            }
+        }
         // The count is the title's: reduced first, so the sum stays small.
-        let read = (context.field(9, 0, 5) + blocks % size) % size;
+        let read = (old_read + blocks % size) % size;
         context.set_field(9, 0, 5, read);
         if blocks > 0 {
             context.set_field(1, 31, 1, 1);
@@ -507,7 +530,75 @@ impl Xma {
         let took = start.elapsed();
         if took.as_millis() >= 4 {
             tracing::debug!(active, ms = took.as_millis(), "slow XMA decoding pass");
+            STATS.slow_passes.fetch_add(1, Relaxed);
         }
+        STATS.max_pass_us.fetch_max(took.as_micros() as u64, Relaxed);
+        STATS.max_active.fetch_max(active, Relaxed);
+    }
+}
+
+/// What the XMA decoder did since the last report, logged every few
+/// seconds at info level so crackles can be told apart in a release build.
+struct Stats {
+    /// Read-block advances of voices that still had input, and those that
+    /// found nothing decoded for them (the mixer got silence).
+    takes: std::sync::atomic::AtomicU64,
+    dry_takes: std::sync::atomic::AtomicU64,
+    enables: std::sync::atomic::AtomicU64,
+    /// Contexts enabled with an overlap buffer, decoded from a cold state.
+    cold_seams: std::sync::atomic::AtomicU64,
+    /// Decoding passes over all voices of 4 ms or more, and the longest.
+    slow_passes: std::sync::atomic::AtomicU64,
+    max_pass_us: std::sync::atomic::AtomicU64,
+    max_active: std::sync::atomic::AtomicUsize,
+}
+
+static STATS: Stats = Stats {
+    takes: std::sync::atomic::AtomicU64::new(0),
+    dry_takes: std::sync::atomic::AtomicU64::new(0),
+    enables: std::sync::atomic::AtomicU64::new(0),
+    cold_seams: std::sync::atomic::AtomicU64::new(0),
+    slow_passes: std::sync::atomic::AtomicU64::new(0),
+    max_pass_us: std::sync::atomic::AtomicU64::new(0),
+    max_active: std::sync::atomic::AtomicUsize::new(0),
+};
+
+const STATS_EVERY: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Logs [`STATS`] and starts a new period.
+fn report_stats() {
+    let takes = STATS.takes.swap(0, Relaxed);
+    let dry = STATS.dry_takes.swap(0, Relaxed);
+    let enables = STATS.enables.swap(0, Relaxed);
+    let seams = STATS.cold_seams.swap(0, Relaxed);
+    let slow = STATS.slow_passes.swap(0, Relaxed);
+    let max_us = STATS.max_pass_us.swap(0, Relaxed);
+    let active = STATS.max_active.swap(0, Relaxed);
+    if takes + enables > 0 {
+        tracing::info!(
+            takes,
+            dry_takes = dry,
+            enables,
+            cold_seams = seams,
+            slow_passes = slow,
+            longest_pass_ms = max_us as f64 / 1000.0,
+            most_voices = active,
+            "XMA decoding: dry takes are heard as crackles"
+        );
+    }
+}
+
+/// The decoding thread runs at the priority of the title's own mixer
+/// thread, so the GPU work around it does not starve the rings.
+fn raise_priority() {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::System::Threading::{
+            GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_TIME_CRITICAL,
+        };
+        // SAFETY: the pseudo handle of the calling thread.
+        let ok = unsafe { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL) } != 0;
+        tracing::info!(ok, "XMA decoder thread at time-critical priority");
     }
 }
 
@@ -660,8 +751,14 @@ fn wake_decoder() {
             std::thread::Builder::new()
                 .name("victory XMA decoder".into())
                 .spawn(|| {
+                    raise_priority();
+                    let mut reported = Instant::now();
                     loop {
                         xma().pump();
+                        if reported.elapsed() >= STATS_EVERY {
+                            report_stats();
+                            reported = Instant::now();
+                        }
                         // A 256-byte output block lasts 2.7 ms at 48 kHz mono.
                         std::thread::park_timeout(std::time::Duration::from_millis(2));
                     }
