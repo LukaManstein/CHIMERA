@@ -76,6 +76,10 @@ pub(crate) struct Shader {
     /// Its output can provide the sky dome for ambient lighting.
     #[cfg(windows)]
     pub(crate) draws_sky: bool,
+    /// Its range of the loop notes (`crate::loop_notes`), given out on its
+    /// first draw.
+    #[cfg(all(windows, feature = "diagnostics"))]
+    pub(crate) loop_slot: OnceLock<u32>,
 }
 
 impl std::fmt::Debug for Shader {
@@ -138,6 +142,8 @@ fn shader(stage: &'static str, bytes: &[u8]) -> Arc<Shader> {
                     .any(|w| w == crate::ambient::REFLECTED),
                 #[cfg(windows)]
                 draws_sky: bytes.windows(crate::ambient::SKY.len()).any(|w| w == crate::ambient::SKY),
+                #[cfg(all(windows, feature = "diagnostics"))]
+                loop_slot: OnceLock::new(),
             })
         })
         .clone()

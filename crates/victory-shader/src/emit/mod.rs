@@ -91,6 +91,8 @@ mod descriptor_tests;
 mod diff_tests;
 #[cfg(all(test, windows))]
 mod intersect_tests;
+#[cfg(all(test, windows))]
+mod loop_tests;
 #[cfg(all(windows, any(test, feature = "host")))]
 pub mod host;
 mod idiom;
@@ -127,6 +129,7 @@ pub use shader::{
     SLOT_STRIDES_COUNT, SLOT_VIEW_BYTES, SLOT_VIEWS, SLOT_VIEWS_COUNT, USER_DATA_SPACE,
     USER_DISPATCH_THREADS_X, USER_MEMORY_BASE, USER_VIEW_ADDRESS, USER_VIEW_BIAS,
     set_view_heap_limit, view_heap_limit,
+    LOOP_NOTE_DWORDS, LOOP_NOTES, SLOT_LOOPS,
 };
 
 /// The iteration counts after which a translated loop is left, per lane
@@ -164,6 +167,21 @@ pub fn loop_limits() -> LoopLimits {
     static LIMITS: std::sync::OnceLock<LoopLimits> = std::sync::OnceLock::new();
     *LIMITS.get_or_init(|| {
         parse_loop_limits(std::env::var("VICTORY_SHADER_LOOP_LIMIT").ok().as_deref())
+    })
+}
+
+/// Whether translated loops count the lanes that reach their iteration
+/// limit ([`SLOT_LOOPS`]): with the `diagnostics` feature,
+/// `VICTORY_LOOP_NOTES=1`. Each lane that reaches a limit adds one to its
+/// loop's record (a helper lane of a pixel shader writes nothing); the host
+/// logs the records by program. It adds a root UAV to every program with a
+/// loop, so it is off unless asked for. Part of the translation: the shader
+/// cache keys on it (`victory-gpu`'s does).
+pub fn loop_notes() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        cfg!(feature = "diagnostics")
+            && std::env::var("VICTORY_LOOP_NOTES").is_ok_and(|v| v.trim() == "1")
     })
 }
 
@@ -279,6 +297,7 @@ pub fn translation_fingerprint() -> Vec<u8> {
     for limit in [limits.pixel, limits.vertex, limits.compute, limits.trace] {
         out.extend_from_slice(&limit.to_le_bytes());
     }
+    out.push(u8::from(loop_notes()));
     out.push(group_sync());
     out.extend_from_slice(&shader_opt().to_le_bytes());
     out
