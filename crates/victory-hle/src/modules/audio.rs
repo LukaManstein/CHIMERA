@@ -567,6 +567,12 @@ struct Carried {
 }
 
 static CARRY: Mutex<BTreeMap<u64, Carried>> = Mutex::new(BTreeMap::new());
+
+/// Why states were or were not carried, since the last report: out with
+/// nothing to carry, out without an overlap buffer in the APU heap, out
+/// stored; in without such a buffer, in without our key, in with a key no
+/// longer kept.
+static CARRY_WHY: [std::sync::atomic::AtomicU64; 6] = [const { std::sync::atomic::AtomicU64::new(0) }; 6];
 static CARRY_KEY: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 /// `VICTORY_XMA_CARRY=0` decodes every context from a cold state, as before.
@@ -584,12 +590,27 @@ fn overlap(context: Context) -> Option<&'static mut [u8]> {
 /// Keeps a disabled voice's decoder and undelivered samples under a key
 /// written into its overlap buffer.
 fn carry_out(context: Context, voice: Voice) {
+    // The first few contexts' words, to see what titles put in word 8.
+    static SAID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    if SAID.fetch_add(1, Relaxed) < 6 {
+        tracing::info!(
+            words = ?(0..16).map(|w| format!("{:08x}", context.get(w))).collect::<Vec<_>>(),
+            overlap_in_apu_heap = overlap(context).is_some(),
+            decoder = voice.decoder.is_some(),
+            pcm = voice.pcm.len(),
+            ended = voice.ended,
+            "XMA context disabled (carry)"
+        );
+    }
     if !carry_on() || (voice.decoder.is_none() && voice.pcm.is_empty()) {
+        CARRY_WHY[0].fetch_add(1, Relaxed);
         return;
     }
     let Some(buffer) = overlap(context) else {
+        CARRY_WHY[1].fetch_add(1, Relaxed);
         return;
     };
+    CARRY_WHY[2].fetch_add(1, Relaxed);
     let key = CARRY_KEY.fetch_add(1, Relaxed);
     let mut carry = lock(&CARRY);
     let now = Instant::now();
@@ -617,14 +638,22 @@ fn carry_in(context: Context) -> Option<Carried> {
     if !carry_on() {
         return None;
     }
-    let buffer = overlap(context)?;
+    let Some(buffer) = overlap(context) else {
+        CARRY_WHY[3].fetch_add(1, Relaxed);
+        return None;
+    };
     let word = |at: usize| u32::from_le_bytes(buffer[at..at + 4].try_into().unwrap_or_default());
     if word(0) != CARRY_MAGIC || word(12) != !CARRY_MAGIC {
+        CARRY_WHY[4].fetch_add(1, Relaxed);
         return None;
     }
     let key = u64::from_le_bytes(buffer[4..12].try_into().unwrap_or_default());
     buffer[0..16].fill(0);
-    let carried = lock(&CARRY).remove(&key)?;
+    let carried = lock(&CARRY).remove(&key);
+    if carried.is_none() {
+        CARRY_WHY[5].fetch_add(1, Relaxed);
+    }
+    let carried = carried?;
     // A buffer reused for a voice of another layout starts cold.
     (carried.channels == context.channels()).then_some(carried)
 }
@@ -677,6 +706,7 @@ fn report_stats() {
             enables,
             cold_seams = seams,
             warm_seams = warm,
+            carry = ?CARRY_WHY.each_ref().map(|c| c.swap(0, Relaxed)),
             slow_passes = slow,
             longest_pass_ms = max_us as f64 / 1000.0,
             most_voices = active,
