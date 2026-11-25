@@ -25,6 +25,20 @@ point: it is stitched together from the best parts of many people's work.
 
 ---
 
+## How to run it
+
+**Step by step: [docs/CHIMERA.md on branch `turbo-next`](https://github.com/LukaManstein/CHIMERA/blob/turbo-next/docs/CHIMERA.md)** — what you need, build, shader warm-up, play, keyboard, troubleshooting. In short:
+
+```bat
+git clone --branch turbo-next https://github.com/LukaManstein/CHIMERA.git
+cd CHIMERA
+cargo build --release -p victory
+cargo xtask agility
+set GAME=D:\path	o\your	itle-folder
+scripts\chimera-turbo.cmd warm
+scripts\chimera-turbo.cmd
+```
+
 ## Branch `turbo` (newest, recommended)
 
 > **2026-11-25: playable (slowly) — the boat chase of "Gone Fishing" played through** — the boat floats and is driven from the handover
