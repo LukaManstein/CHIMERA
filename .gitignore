@@ -76,3 +76,6 @@
 *.swp
 Thumbs.db
 .DS_Store
+
+# CHIMERA installer: the path to the user's own copy of the title
+chimera.cfg
