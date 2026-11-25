@@ -1,0 +1,46 @@
+name: Bug report
+description: A crash, a hang, a rendering or audio problem
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Never attach or link game files, keys, executables or dumps.** Issues that do are closed and deleted.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you saw, and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: where
+    attributes:
+      label: Where in the game
+      description: Boot, menus, intro, prologue, a mission… and how long after start.
+  - type: input
+    id: commit
+    attributes:
+      label: CHIMERA commit
+      description: Output of `git rev-parse --short HEAD`
+    validations:
+      required: true
+  - type: textarea
+    id: system
+    attributes:
+      label: System
+      description: Windows version, CPU, GPU and driver version, RAM.
+      placeholder: Windows 10 LTSC 21H2, Ryzen 7 2700, RTX 3080 Ti (driver 5xx.xx), 32 GB
+    validations:
+      required: true
+  - type: textarea
+    id: switches
+    attributes:
+      label: Switches
+      description: Any VICTORY_* variables you set.
+  - type: textarea
+    id: log
+    attributes:
+      label: Log excerpt
+      description: The last ~50 lines of the log, and the newest entry of %LOCALAPPDATA%\victory\data\crashes.log if there is one.
+      render: text
