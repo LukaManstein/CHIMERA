@@ -7,7 +7,6 @@
   <img alt="Language: Rust" src="https://img.shields.io/badge/rust-stable-ff9a3c">
   <img alt="Platform: Windows 10/11" src="https://img.shields.io/badge/windows-10%20%7C%2011-ff4d8d">
   <img alt="Status: work in progress" src="https://img.shields.io/badge/status-work%20in%20progress-555">
-  <a href="https://t.me/+rL9uLOqRWck2ZDMx"><img alt="Telegram" src="https://img.shields.io/badge/telegram-join-26A5E4?logo=telegram&logoColor=white"></a>
 </p>
 
 **CHIMERA** runs an Xbox Series title natively on Windows, from files you
@@ -26,7 +25,26 @@ point: it is stitched together from the best parts of many people's work.
 
 ---
 
-## Status
+## Branch `turbo` (newest, recommended)
+
+Branch [`turbo`](https://github.com/LukaManstein/CHIMERA/tree/turbo) is CHIMERA rebuilt on the newest
+[victory-fork](https://github.com/fxceless/victory-fork) (`f85101b`: async submit, copy queue for
+fetches, cheap descriptor-sync fingerprint) with:
+
+| Change | From | Why |
+|---|---|---|
+| 77 shader-translator fixes (signature rows, interpolation, samplers, LDS bounds, packed dot products, 64-bit image atomics) | [VItoriaBr](https://github.com/uiliannn/VItoriaBr) by uiliannn and contributors | shaders that do not translate: 254 → **208**; draws dropped per frame in the world: ~300 → **~100** |
+| Constant indirect light after the probe resolve (`VICTORY_AMBIENT`, 0.6) | ported from [Belobug/VIctory-Belobug-AMD](https://github.com/Belobug/VIctory-Belobug-AMD) | without ray tracing everything the sun misses was black |
+| Pipeline workers: `VICTORY_PIPELINE_WORKERS`, `VICTORY_PIPELINE_NORMAL` | LukaManstein | with 8 below-normal workers and the title on every core, pipelines were built at ~1 per 2 s and half the draws were missing for minutes |
+| D3D12 Agility SDK runtime | kykifox1337-source | Windows 10 |
+
+**Measured** (same PC as below, emulator's own frame lines, Series X, 1280×720, all switches in the branch's launcher):
+a 22-minute session from the prologue into **Chapter 1** with no crash or device removal; the title wrote its story
+autosave. In the world: median **3.5–3.8 fps**, 4.3–5.8 in lighter scenes, peaks of 8.4, dips to ~1.3 in heavy ones.
+Shaders are translated ahead of time with `victory warm <game>\shaders.rpf` (~4 min on 16 threads); the card's pipelines
+are built in the first session and kept on disk.
+
+## Status (main branch, victory-perf base)
 
 Measured on **Windows 10 LTSC 21H2 · AMD Ryzen 7 2700 · NVIDIA RTX 3080 Ti 12 GB · 32 GB RAM**
 (a 2018 CPU — the emulation is bound by single-thread speed and CPU↔GPU synchronisation).
@@ -104,7 +122,6 @@ Keyboard (when no pad is connected): **WASD** left stick · **IJKL** right stick
 
 ## Community
 
-News, build help and progress videos: **[Telegram](https://t.me/+rL9uLOqRWck2ZDMx)**.
 Bugs go to [Issues](https://github.com/LukaManstein/CHIMERA/issues) (use the form).
 Never post game files, keys, executables or links to them — anywhere.
 
