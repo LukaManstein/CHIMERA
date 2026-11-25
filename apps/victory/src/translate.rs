@@ -199,6 +199,15 @@ pub fn warm(paths: Vec<PathBuf>, file: &Path, jobs: Option<usize>) -> Result<()>
                                 continue;
                             };
                             let hash = blake3::hash(&bytes).to_hex()[..16].to_owned();
+                            // `VICTORY_NAMES=<a>,<b>`: print the hash of every
+                            // container whose name holds one of them (a run's
+                            // log names shaders by hash only).
+                            if let Ok(names) = std::env::var("VICTORY_NAMES") {
+                                let label = job.label();
+                                if names.split(',').any(|n| !n.is_empty() && label.contains(n.trim())) {
+                                    println!("name         {hash} {label}");
+                                }
+                            }
                             if limit.is_some_and(|n| began.elapsed().as_secs() >= n) {
                                 counts[3].fetch_add(1, Ordering::Relaxed);
                                 break;
