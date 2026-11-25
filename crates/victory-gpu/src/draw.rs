@@ -2248,7 +2248,6 @@ impl State {
     /// most once a second per program, what its unordered views' title
     /// memory holds now (the first 16 dwords, as integers and as floats).
     fn watch_other(&self, list: &HostList, stage: &crate::pipeline::host::Stage) {
-        texture_back_all(self, list, stage);
         static LAST: std::sync::Mutex<Vec<(String, u64, u64)>> = std::sync::Mutex::new(Vec::new());
         let now = crate::host::now_ms();
         {
@@ -3759,71 +3758,3 @@ fn texture_seen(_list: &HostList, hash: &str, r: This) {
     );
 }
 
-/// `VICTORY_TEXTURE_BACK=<hash>,...`: after each dispatch of a listed
-/// program, its 1x1 unordered textures are copied from the card back into
-/// their console memory once the list has run (what shaders write to
-/// textures otherwise stays on the card, and a CPU that reads that memory,
-/// as the console's does, sees what was there before). Experiment for the
-/// sinking boat (victory-fork #863): the water's timestep is such a texture.
-#[cfg(windows)]
-fn texture_back_all(state: &State, list: &HostList, stage: &crate::pipeline::host::Stage) {
-    static HASHES: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
-    let hashes = HASHES.get_or_init(|| {
-        std::env::var("VICTORY_TEXTURE_BACK")
-            .unwrap_or_default()
-            .split(',')
-            .map(|h| h.trim().to_owned())
-            .filter(|h| !h.is_empty())
-            .collect()
-    });
-    if !hashes.iter().any(|h| *h == stage.shader.hash) {
-        return;
-    }
-    for u in stage.translated().used.iter().filter(|u| u.kind == ResourceType::Uav && u.root == RootType::Table) {
-        let Some(Root::Table(table)) = state.roots_ref(true).get(usize::from(u.slot)) else {
-            continue;
-        };
-        let Some(View::Unordered(r, ..)) = crate::descriptor::view(table + u64::from(u.table_offset_dwords) * 4) else {
-            continue;
-        };
-        let r = r as This;
-        let (Some((memory, _)), Some(texture), Some(host)) =
-            (crate::resource::texture_memory(r), crate::resource::host_resource(r), crate::host::host())
-        else {
-            continue;
-        };
-        // SAFETY: a live resource.
-        let d = unsafe { texture.GetDesc() };
-        let Some((bytes, _)) = crate::resource::element(d.Format.0 as u32) else {
-            continue;
-        };
-        if d.Width != 1 || d.Height != 1 || bytes == 0 || bytes > 16 {
-            once!(width = d.Width, height = d.Height, format = d.Format.0, "VICTORY_TEXTURE_BACK: only 1x1 textures are copied back");
-            continue;
-        }
-        let Some(buffer) = host.read_back_buffer(256) else {
-            continue;
-        };
-        crate::list::ensure_state(list, r, 0x800);
-        let from = D3D12_TEXTURE_COPY_LOCATION {
-            pResource: unsafe { std::mem::transmute_copy(texture) },
-            Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
-            Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 { SubresourceIndex: 0 },
-        };
-        let to = D3D12_TEXTURE_COPY_LOCATION {
-            pResource: unsafe { std::mem::transmute_copy(&buffer) },
-            Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
-            Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
-                PlacedFootprint: D3D12_PLACED_SUBRESOURCE_FOOTPRINT {
-                    Offset: 0,
-                    Footprint: D3D12_SUBRESOURCE_FOOTPRINT { Format: d.Format, Width: 1, Height: 1, Depth: 1, RowPitch: 256 },
-                },
-            },
-        };
-        // SAFETY: an open list; a live texture in the copy-source state and
-        // our read-back buffer, which the list keeps until it has run.
-        unsafe { list.list.CopyTextureRegion(&to, 0, 0, 0, &from, None) };
-        list.defer_read_back(buffer, memory.cast_mut(), [bytes as usize, 1, bytes as usize]);
-        once!(hash = %stage.shader.hash, format = d.Format.0, bytes, "VICTORY_TEXTURE_BACK: a 1x1 texture is copied back to console memory");
-    }
-}
