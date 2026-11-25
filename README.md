@@ -27,6 +27,13 @@ point: it is stitched together from the best parts of many people's work.
 
 ## Branch `turbo` (newest, recommended)
 
+> **2026-11-25: playable (slowly) — the boat chase of "Gone Fishing" played through** — the boat floats and is driven from the handover
+> to Jason on foot at the camp, in a 31-minute session without a crash, on an RTX 3080 Ti under **Windows 10**
+> (median 3.9 fps in the mission; a recording will be linked here). The boat fix is
+> [Geckomacabre/vx-layer `eee5667d`](https://github.com/Geckomacabre/vx-layer/commit/eee5667d7119bc4a378214621e1b18a814ebe80f)
+> (textures shaders write that the CPU reads are copied back to title memory), cherry-picked into `turbo`;
+> how the bug was narrowed down is on [fxceless/victory-fork#863](https://github.com/fxceless/victory-fork/issues/863).
+
 Branch [`turbo`](https://github.com/LukaManstein/CHIMERA/tree/turbo) is CHIMERA rebuilt on the newest
 [victory-fork](https://github.com/fxceless/victory-fork) (`f85101b`: async submit, copy queue for
 fetches, cheap descriptor-sync fingerprint) with:
@@ -37,6 +44,8 @@ fetches, cheap descriptor-sync fingerprint) with:
 | Constant indirect light after the probe resolve (`VICTORY_AMBIENT`, 0.6) | ported from [Belobug/VIctory-Belobug-AMD](https://github.com/Belobug/VIctory-Belobug-AMD) | without ray tracing everything the sun misses was black |
 | Pipeline workers: `VICTORY_PIPELINE_WORKERS`, `VICTORY_PIPELINE_NORMAL` | LukaManstein | with 8 below-normal workers and the title on every core, pipelines were built at ~1 per 2 s and half the draws were missing for minutes |
 | D3D12 Agility SDK runtime | kykifox1337-source | Windows 10 |
+| Texture copy-back: what shaders write into the ocean height/displacement maps reaches title memory (`eee5667d`) | Geckomacabre/vx-layer | **the boat floats**; before, it sank in the first mission for every build |
+| Raw buffer views off 16 bytes get their own copy instead of a null view; water diagnostics (`VICTORY_WATCH_HASH`, `VICTORY_WHY_INDIRECT`) | LukaManstein | a lost write fixed; the boat bug narrowed down on #863 |
 
 **Measured** (same PC as below, emulator's own frame lines, Series X, 1280×720, all switches in the branch's launcher):
 a 22-minute session from the prologue into **Chapter 1** with no crash or device removal; the title wrote its story
