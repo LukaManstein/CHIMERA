@@ -9,6 +9,7 @@ mod inspect;
 mod run;
 mod shader;
 mod translate;
+mod warm;
 
 use std::path::PathBuf;
 
@@ -17,7 +18,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Parser)]
 #[command(
-    name = "victory",
+    name = "VItoriaBr",
     version,
     about = "Run an Xbox Series title natively on Windows"
 )]
@@ -92,6 +93,20 @@ enum Command {
         /// `VICTORY_VIEW_LIMIT` to what the run's log says of the host.
         #[arg(long)]
         warm: Option<PathBuf>,
+    },
+    /// Translate every shader found into the shader cache ahead of a run,
+    /// so the first run reads them from the cache instead of translating
+    /// them while the title waits. Run it with the same build and
+    /// VICTORY_* settings as the title. Defaults to the configured game
+    /// and test-title directories.
+    Warm {
+        paths: Vec<PathBuf>,
+        /// Print each shader that does not translate.
+        #[arg(long)]
+        list: bool,
+        /// Worker threads (default: every logical core).
+        #[arg(long)]
+        jobs: Option<usize>,
     },
     /// Prepare, map and bind a title executable; with --execute, run it.
     Run {
@@ -175,6 +190,7 @@ fn main() -> Result<()> {
             }
             translate::run(paths, validate, pipelines, list, jobs)
         }
+        Command::Warm { paths, list, jobs } => warm::run(paths, list, jobs),
         Command::Run {
             exe,
             unimplemented,
