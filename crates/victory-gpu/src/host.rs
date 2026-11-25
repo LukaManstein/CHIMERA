@@ -8520,8 +8520,12 @@ impl Meter {
             self.caption = Some(buffer);
         }
         let Some(caption) = &self.caption else { return };
-        let text = format!(" | VIctory {fps:.0} fps {ms:.1} ms/frame {draws:.0} draws/frame");
-        let mut text: Vec<u16> = caption.iter().copied().chain(text.encode_utf16()).collect();
+        // CHIMERA's caption: the build first, the numbers in the middle, the
+        // title's own window text last (the same text, as rarely as before).
+        let draws = draws.round() as u64;
+        let draws = if draws >= 1000 { format!("{}\u{202f}{:03}", draws / 1000, draws % 1000) } else { draws.to_string() };
+        let text = format!("CHIMERA \u{d7} VIctory  \u{b7}  {fps:.1} fps  \u{b7}  {ms:.0} ms  \u{b7}  {draws} draws  \u{b7}  ");
+        let mut text: Vec<u16> = text.encode_utf16().chain(caption.iter().copied()).collect();
         text.push(0);
         // Setting the text waits for the window's thread (a title thread,
         // which may not pump for a while), so a thread of ours does it and
