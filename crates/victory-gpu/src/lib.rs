@@ -57,6 +57,8 @@ pub mod pipeline;
 #[cfg(windows)]
 mod plaincopy;
 #[cfg(windows)]
+mod ranges;
+#[cfg(windows)]
 mod primitive;
 #[cfg(all(windows, feature = "diagnostics"))]
 mod profile;

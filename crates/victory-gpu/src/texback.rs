@@ -14,6 +14,14 @@
 //! the texels are tiled into the texture's title memory in the console's
 //! layout, as the console's GPU would have left them.
 //!
+//! Ported from myokex/victory-amd `1544bd5` (GPL-3.0-or-later).
+//! From Geckomacabre/vx-layer `eee5667d` as fxceless PR 999 has it (with the
+//! allocation tickets and the flights' ranges of its second commit). The
+//! height map is in a pipe and bank XOR swizzle mode, which the layouts
+//! address since PastiiJay's klbf-lab `ee7081b7` (from MiamiGame/XTP
+//! `00c60fb` and `188d895`, patterns generated out of Mesa's addrlib, MIT);
+//! without it no copy back could be tiled. GPL-3.0-or-later.
+//!
 //! shortcut: by kind, not by texture: textures of those kinds the title never
 //! reads are copied back too (about a megabyte per such list). The copy shows
 //! what the list's last write left; a title read in between sees the frame
@@ -117,23 +125,6 @@ impl Target {
         let copy = crate::resource::host_copy(resource)?;
         let _mapping = crate::watch::title_memory_reading();
         let (layout, at, size) = crate::resource::title_texture(resource)?;
-        // A layout that cannot be tiled back (an XOR mode, or several
-        // samples: no console address for them yet, as for uploads) is not
-        // copied at all: it was read back every list and thrown away.
-        if !layout.addressable() {
-            static SKIPPED: Mutex<Vec<(u32, u32)>> = Mutex::new(Vec::new());
-            let kind = (layout.desc.swizzle.0 as u32, layout.desc.samples as u32);
-            let mut skipped = SKIPPED.lock().unwrap_or_else(|e| e.into_inner());
-            if !skipped.contains(&kind) {
-                skipped.push(kind);
-                tracing::warn!(
-                    swizzle = layout.desc.swizzle.0,
-                    samples = layout.desc.samples,
-                    "texture of a copied-back kind in a layout with no console address (XOR or multisampled): not copied back"
-                );
-            }
-            return None;
-        }
         let end = at.checked_add(size).filter(|&end| at != 0 && end > at)?;
         let ticket = track(resource as usize, at, end);
         Some(Self { copy, layout, ticket })
@@ -251,7 +242,9 @@ pub(crate) fn land(back: &Back) {
         let linear = unsafe { std::slice::from_raw_parts(data.cast::<u8>().add(footprint.Offset as usize), len) };
         if let Err(e) = back.layout.tile(&mut tiled, mip, slice, linear, pitch, pitch * rows as usize) {
             static ONCE: std::sync::Once = std::sync::Once::new();
-            ONCE.call_once(|| tracing::warn!(?e, mip, slice, "a texture copied back could not be tiled"));
+            ONCE.call_once(|| {
+                tracing::warn!(?e, mip, slice, swizzle = back.layout.desc.swizzle.0, "a texture copied back could not be tiled")
+            });
             // SAFETY: mapped above.
             unsafe { back.buffer.Unmap(0, None) };
             return;
@@ -261,8 +254,16 @@ pub(crate) fn land(back: &Back) {
     unsafe { back.buffer.Unmap(0, None) };
     crate::host::copy_mapped(at as *mut u8, tiled.as_ptr(), size, true);
     let copied = COPIED.fetch_add(1, Ordering::Relaxed) + 1;
-    if copied == 1 || copied.is_multiple_of(128) {
-        tracing::info!(copied, bytes = size, "texture readback landed");
+    if copied <= 4 || copied.is_multiple_of(512) {
+        tracing::info!(
+            copied,
+            bytes = size,
+            swizzle = back.layout.desc.swizzle.0,
+            width = back.layout.desc.width,
+            height = back.layout.desc.height,
+            element = back.layout.desc.element_bytes,
+            "texture readback landed (VICTORY_TEXTURE_BACK)"
+        );
     }
 }
 

@@ -4008,6 +4008,40 @@ impl Host {
         })
     }
 
+    /// Short uppercase GPU name for the on-screen HUD (`fpsbox`).
+    pub(crate) fn gpu_label(&self) -> String {
+        let raw = self
+            .adapter
+            .as_ref()
+            .and_then(|a| unsafe { a.GetDesc1() }.ok())
+            .map(|d| {
+                let end = d
+                    .Description
+                    .iter()
+                    .position(|&c| c == 0)
+                    .unwrap_or(d.Description.len());
+                String::from_utf16_lossy(&d.Description[..end])
+            })
+            .unwrap_or_default();
+        let trimmed = raw
+            .trim()
+            .strip_prefix("NVIDIA GeForce ")
+            .or_else(|| raw.trim().strip_prefix("AMD Radeon "))
+            .or_else(|| raw.trim().strip_prefix("Intel(R) "))
+            .unwrap_or(raw.trim());
+        trimmed.to_ascii_uppercase()
+    }
+
+    /// Current local VRAM usage of this process in MiB, if DXGI reports it.
+    pub(crate) fn vram_used_mb(&self) -> Option<u32> {
+        use windows::Win32::Graphics::Dxgi::{DXGI_MEMORY_SEGMENT_GROUP_LOCAL, IDXGIAdapter3};
+        let adapter = self.adapter.as_ref()?.cast::<IDXGIAdapter3>().ok()?;
+        let mut info = Default::default();
+        // SAFETY: live DXGI adapter3 and valid out-struct.
+        unsafe { adapter.QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &mut info) }.ok()?;
+        Some((info.CurrentUsage >> 20).min(u64::from(u32::MAX)) as u32)
+    }
+
     /// A new list, open for recording.
     pub(crate) fn new_list(&self) -> windows::core::Result<HostList> {
         #[cfg(feature = "diagnostics")]
@@ -6783,10 +6817,17 @@ impl HostList {
         if !crate::texback::wanted(resource) {
             return;
         }
+        let noted = |deferred: &Deferred| deferred.back_wanted.iter().any(|target| target.owner() == resource as usize);
+        if noted(&self.deferred()) {
+            return;
+        }
+        // Not with the list's deferred work locked: it waits for the runtime
+        // to be done with a change of mapping.
+        let Some(target) = crate::texback::Target::new(resource) else {
+            return;
+        };
         let mut deferred = self.deferred();
-        if !deferred.back_wanted.iter().any(|target| target.owner() == resource as usize)
-            && let Some(target) = crate::texback::Target::new(resource)
-        {
+        if !noted(&deferred) {
             deferred.back_wanted.push(target);
         }
     }
@@ -8325,9 +8366,9 @@ impl Meter {
         let drawn = crate::draw::drawn();
         let frames = f64::from(self.frames);
         let fps = frames / elapsed.as_secs_f64();
-        crate::fpsbox::set(fps);
         let ms = elapsed.as_secs_f64() * 1000.0 / frames;
         let draws = (drawn - self.drawn) as f64 / frames;
+        crate::fpsbox::set(fps, ms, draws);
         (self.since, self.frames, self.drawn) = (std::time::Instant::now(), 0, drawn);
         // Of a frame, ms preparing submissions and ms waiting for the GPU.
         let [cpu, gpu] = [0, 1].map(|i| {
