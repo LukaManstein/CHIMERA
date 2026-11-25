@@ -20,6 +20,8 @@ set VICTORY_PIPELINE_WORKERS=12
 set VICTORY_PIPELINE_NORMAL=1
 set VICTORY_DISPLAY_MODE=1280x720
 set VICTORY_AMBIENT=0.6
+rem title-memory copies in user mode (victory-fork 0b0074e)
+set VICTORY_COPY_PLAIN=1
 if "%1"=="warm" (
   target\release\victory.exe warm --jobs 16 "%GAME%\shaders.rpf"
   goto :eof
