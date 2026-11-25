@@ -416,11 +416,15 @@ impl Xma {
         };
         let mut slot = lock(&self.voices[index as usize]);
         STATS.enables.fetch_add(1, Relaxed);
-        // An overlap buffer means a voice continued from a context before
-        // it: decoding from a cold state here drops the overlap at the seam.
-        if context.get(8) != 0 {
-            STATS.cold_seams.fetch_add(1, Relaxed);
-        }
+        // The state a context before this one left in the overlap buffer
+        // (`carry_out`): its decoder, still holding the last frame's
+        // overlap, and the samples it decoded but had no room for.
+        let carried = carry_in(context);
+        match &carried {
+            Some(_) => STATS.warm_seams.fetch_add(1, Relaxed),
+            None if context.get(8) != 0 => STATS.cold_seams.fetch_add(1, Relaxed),
+            None => 0,
+        };
         context.set_field(2, 26, 6, 0);
         tracing::debug!(
             index,
@@ -429,9 +433,10 @@ impl Xma {
         );
         #[cfg(feature = "diagnostics")]
         dump_input(index, context);
+        let (decoder, pcm) = carried.map_or((None, VecDeque::new()), |c| (c.decoder, c.pcm));
         *slot = Some(Voice {
-            decoder: None,
-            pcm: VecDeque::new(),
+            decoder,
+            pcm,
             skip: context.field(1, 24, 3) as usize * xma::SUBFRAME_SAMPLES,
             ended: false,
             trace: Trace {
@@ -473,6 +478,7 @@ impl Xma {
             input_bits = context.field(0, 0, 12) * xma::PACKET_BYTES as u32 * 8,
             "XMA voice disabled"
         );
+        carry_out(context, voice);
     }
 
     /// Moves the title's read block on, which frees output space.
@@ -537,6 +543,92 @@ impl Xma {
     }
 }
 
+// Decoder state across contexts.
+//
+// The hardware keeps a voice's decoder state in the context's overlap
+// buffer (word 8) and titles copy that buffer into the next context of the
+// voice (or enable the same context again). Decoding each context from a
+// cold state loses the last frame's overlap and the samples decoded but
+// not yet written to the ring: a dip and a gap at every seam, which the
+// title makes hundreds of times a second (heard as crackles). We keep that
+// state here and leave a key to it in the overlap buffer instead.
+
+/// Marks our key in an overlap buffer: "CHIM".
+const CARRY_MAGIC: u32 = 0x4348_494d;
+/// Carried states not claimed within this long are dropped.
+const CARRY_TTL: std::time::Duration = std::time::Duration::from_secs(2);
+const CARRY_MAX: usize = 1024;
+
+struct Carried {
+    decoder: Option<xma::Decoder>,
+    pcm: VecDeque<i16>,
+    channels: usize,
+    at: Instant,
+}
+
+static CARRY: Mutex<BTreeMap<u64, Carried>> = Mutex::new(BTreeMap::new());
+static CARRY_KEY: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// `VICTORY_XMA_CARRY=0` decodes every context from a cold state, as before.
+fn carry_on() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_XMA_CARRY").is_none_or(|v| v != "0"))
+}
+
+/// The first 16 bytes of a context's overlap buffer, if it has one.
+fn overlap(context: Context) -> Option<&'static mut [u8]> {
+    let at = context.get(8);
+    (at != 0).then(|| heap_bytes(at, 16)).flatten()
+}
+
+/// Keeps a disabled voice's decoder and undelivered samples under a key
+/// written into its overlap buffer.
+fn carry_out(context: Context, voice: Voice) {
+    if !carry_on() || (voice.decoder.is_none() && voice.pcm.is_empty()) {
+        return;
+    }
+    let Some(buffer) = overlap(context) else {
+        return;
+    };
+    let key = CARRY_KEY.fetch_add(1, Relaxed);
+    let mut carry = lock(&CARRY);
+    let now = Instant::now();
+    carry.retain(|_, c| now.duration_since(c.at) < CARRY_TTL);
+    while carry.len() >= CARRY_MAX {
+        carry.pop_first();
+    }
+    carry.insert(
+        key,
+        Carried {
+            decoder: voice.decoder,
+            pcm: voice.pcm,
+            channels: context.channels(),
+            at: now,
+        },
+    );
+    buffer[0..4].copy_from_slice(&CARRY_MAGIC.to_le_bytes());
+    buffer[4..12].copy_from_slice(&key.to_le_bytes());
+    buffer[12..16].copy_from_slice(&(!CARRY_MAGIC).to_le_bytes());
+}
+
+/// The state a context before this one left in its overlap buffer, if
+/// any, and only once.
+fn carry_in(context: Context) -> Option<Carried> {
+    if !carry_on() {
+        return None;
+    }
+    let buffer = overlap(context)?;
+    let word = |at: usize| u32::from_le_bytes(buffer[at..at + 4].try_into().unwrap_or_default());
+    if word(0) != CARRY_MAGIC || word(12) != !CARRY_MAGIC {
+        return None;
+    }
+    let key = u64::from_le_bytes(buffer[4..12].try_into().unwrap_or_default());
+    buffer[0..16].fill(0);
+    let carried = lock(&CARRY).remove(&key)?;
+    // A buffer reused for a voice of another layout starts cold.
+    (carried.channels == context.channels()).then_some(carried)
+}
+
 /// What the XMA decoder did since the last report, logged every few
 /// seconds at info level so crackles can be told apart in a release build.
 struct Stats {
@@ -545,8 +637,10 @@ struct Stats {
     takes: std::sync::atomic::AtomicU64,
     dry_takes: std::sync::atomic::AtomicU64,
     enables: std::sync::atomic::AtomicU64,
-    /// Contexts enabled with an overlap buffer, decoded from a cold state.
+    /// Contexts enabled with an overlap buffer, decoded from a cold state,
+    /// and those that went on from the state a context before left.
     cold_seams: std::sync::atomic::AtomicU64,
+    warm_seams: std::sync::atomic::AtomicU64,
     /// Decoding passes over all voices of 4 ms or more, and the longest.
     slow_passes: std::sync::atomic::AtomicU64,
     max_pass_us: std::sync::atomic::AtomicU64,
@@ -558,6 +652,7 @@ static STATS: Stats = Stats {
     dry_takes: std::sync::atomic::AtomicU64::new(0),
     enables: std::sync::atomic::AtomicU64::new(0),
     cold_seams: std::sync::atomic::AtomicU64::new(0),
+    warm_seams: std::sync::atomic::AtomicU64::new(0),
     slow_passes: std::sync::atomic::AtomicU64::new(0),
     max_pass_us: std::sync::atomic::AtomicU64::new(0),
     max_active: std::sync::atomic::AtomicUsize::new(0),
@@ -571,6 +666,7 @@ fn report_stats() {
     let dry = STATS.dry_takes.swap(0, Relaxed);
     let enables = STATS.enables.swap(0, Relaxed);
     let seams = STATS.cold_seams.swap(0, Relaxed);
+    let warm = STATS.warm_seams.swap(0, Relaxed);
     let slow = STATS.slow_passes.swap(0, Relaxed);
     let max_us = STATS.max_pass_us.swap(0, Relaxed);
     let active = STATS.max_active.swap(0, Relaxed);
@@ -580,6 +676,7 @@ fn report_stats() {
             dry_takes = dry,
             enables,
             cold_seams = seams,
+            warm_seams = warm,
             slow_passes = slow,
             longest_pass_ms = max_us as f64 / 1000.0,
             most_voices = active,
@@ -642,8 +739,13 @@ fn decode(context: Context, voice: &mut Voice) -> bool {
     let valid = context.field(0, 20, 2);
     if valid & (1 << current) == 0 {
         if valid & (1 << (1 - current)) == 0 {
-            // Out of input: the overlap tail, then nothing.
-            if let Some(decoder) = &mut voice.decoder {
+            // Out of input: the overlap tail, then nothing. With an overlap
+            // buffer the next context goes on from here (`carry_out`) and
+            // its first frame overlaps this tail, as on the hardware;
+            // flushing it here would fade out and back in at every seam.
+            if context.get(8) == 0
+                && let Some(decoder) = &mut voice.decoder
+            {
                 let mut tail = Vec::new();
                 decoder.flush(&mut tail);
                 voice.pcm.extend(tail);
