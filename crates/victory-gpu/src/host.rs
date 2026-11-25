@@ -695,7 +695,7 @@ fn create() -> windows::core::Result<Host> {
 
 /// DXGI may return hardware for `EnumWarpAdapter` (notably under Proton).
 /// Reject it before creating a device in diagnostics' software-only mode.
-fn warp_adapter() -> windows::core::Result<IDXGIAdapter> {
+pub(crate) fn warp_adapter() -> windows::core::Result<IDXGIAdapter> {
     // SAFETY: plain DXGI adapter queries.
     unsafe {
         let factory: IDXGIFactory4 = CreateDXGIFactory2(DXGI_CREATE_FACTORY_FLAGS(0))?;
@@ -2856,7 +2856,8 @@ fn declared_writes(runs: &[&HostList]) -> Vec<Declared> {
 /// ([`read_backs`]), the frame's main pass by scissor rectangle with its
 /// culling dispatches (`draw.rs`, `walls_census`), the shader-written
 /// buffers merged into title memory (`shadow.rs`, `walls_merged`), host
-/// copies found stale after their refresh (`shadow.rs`), and, in the
+/// copies found stale after their refresh (`shadow.rs`; only with
+/// `VICTORY_REFRESH_CHECK=1` as well: it costs about 100 ms a frame), and, in the
 /// runtime, the read requests that fail (with 2: every request).
 pub(crate) fn walls_trace() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
@@ -5823,6 +5824,13 @@ fn for_pieces(start: usize, len: usize, step: usize, mut f: impl FnMut(usize, us
 }
 
 impl Host {
+    /// The queue everything of ours runs on, for a call that must go to it
+    /// in order with the lists (`crate::tiles`: a texture's levels are
+    /// given memory ahead of the list that uploads them).
+    pub(crate) fn queue(&self) -> &ID3D12CommandQueue {
+        &self.queue
+    }
+
     /// A buffer in the upload heap, mapped for writing.
     /// A buffer of `size` bytes the card writes and we read (a read back),
     /// in the state copies into it need.
@@ -6131,6 +6139,7 @@ impl Meter {
                 "placed texture views: {} writes of another view of the texture a slot showed (it kept the old view until the new was made)",
                 crate::descriptor::host::KEPT_VIEWS.load(Ordering::Relaxed)
             );
+            crate::tiles::status();
             {
                 let [queued, due, away, partly, oldest] =
                     [0, 1, 2, 3, 4].map(|i| crate::draw::HEAP_TEXTURES_QUEUE[i].load(Ordering::Relaxed));
@@ -6152,6 +6161,19 @@ impl Meter {
                     crate::descriptor::host::STALE[2].load(Ordering::Relaxed),
                     crate::descriptor::host::STALE[3].load(Ordering::Relaxed),
                     crate::descriptor::host::STALE[4].load(Ordering::Relaxed)
+                );
+            }
+            {
+                let mode = crate::watch::page_writes();
+                let [writes, bytes, guarded, plain] = [0, 1, 2, 3].map(|i| crate::watch::WRITTEN[i].load(Ordering::Relaxed));
+                let [kept, dropped, slots, uploaded] =
+                    [0, 1, 2, 3].map(|i| crate::descriptor::host::PAGE_WRITES[i].load(Ordering::Relaxed));
+                tracing::info!(
+                    "writes behind the guards, since the start: {writes} DirectStorage writes into physical pages at addresses the                      title had mapped ({} MB); {guarded} guarded 64 KiB blocks of host copies lay under them ({}); {plain} reads to                      plain addresses finished ({}); {kept} ranges under texture views kept for the texture pass ({dropped} dropped);                      {slots} slots of placed textures held their bytes, {uploaded} of them uploaded before the write ({})                      (VICTORY_PAGE_WRITES: unset counts, 1 acts, guards, slots, all)",
+                    bytes >> 20,
+                    if mode & 1 != 0 { "opened, taken again" } else { "left as they were" },
+                    if mode & 4 != 0 { "told as well" } else { "counted only" },
+                    if mode & 2 != 0 { "made due again" } else { "left as they were" }
                 );
             }
             #[cfg(feature = "diagnostics")]
@@ -6411,6 +6433,9 @@ impl Host {
             let swap_chain = factory
                 .CreateSwapChainForHwnd(&self.queue, hwnd, &desc, None, None)?
                 .cast::<IDXGISwapChain3>()?;
+            if fullscreen_wanted() {
+                borderless_fullscreen(hwnd);
+            }
             let copy = self.new_list()?;
             copy.close();
             tracing::info!(width, height, format = format.0, "presenting to a window");
@@ -6744,6 +6769,34 @@ pub(crate) fn transition(
                 StateAfter: after,
             }),
         },
+    }
+}
+
+/// `VICTORY_FULLSCREEN=1`: the presenting window covers the primary screen
+/// without borders (borderless fullscreen; the swap chain's buffers stretch
+/// to it). Off by default.
+fn fullscreen_wanted() -> bool {
+    std::env::var_os("VICTORY_FULLSCREEN").is_some_and(|v| v == "1")
+}
+
+/// Makes `hwnd` (ours or the title's) a borderless window over the whole
+/// primary screen.
+fn borderless_fullscreen(hwnd: HWND) {
+    // SAFETY: plain calls on a live window; the move is posted to the
+    // window's own thread rather than waited for.
+    unsafe {
+        let (width, height) = (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN));
+        SetWindowLongPtrW(hwnd, GWL_STYLE, (WS_POPUP | WS_VISIBLE).0 as isize);
+        let moved = SetWindowPos(
+            hwnd,
+            Some(HWND_TOP),
+            0,
+            0,
+            width,
+            height,
+            SWP_FRAMECHANGED | SWP_SHOWWINDOW | SWP_ASYNCWINDOWPOS,
+        );
+        tracing::info!(width, height, ok = moved.is_ok(), "borderless fullscreen (VICTORY_FULLSCREEN=1)");
     }
 }
 
