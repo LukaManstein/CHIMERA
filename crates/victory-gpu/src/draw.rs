@@ -2141,6 +2141,7 @@ impl State {
         // SAFETY: an open list with everything set.
         unsafe { list.list.Dispatch(x, y, z) };
         DISPATCHED.fetch_add(1, Ordering::Relaxed);
+        self.watch_water(p);
         // The least indirect light after the program that resolves it; its
         // pass sets its own heap, root signature and pipeline, so the next
         // draw or dispatch binds the title's again.
@@ -2148,6 +2149,74 @@ impl State {
             self.host_pipeline = 0;
             self.host_roots = [0; 2];
             self.host_heaps = [0; 2];
+        }
+    }
+
+    /// Diagnostics for the boat that sinks (victory-fork #863): at each
+    /// dispatch of the program `VICTORY_WATCH_HASH` names (by default
+    /// `ShallowWaterSim:CS_ResolveHeightLookUps`, `92b4790eb4c29f6d`; `0`
+    /// turns it off), the title memory its unordered views write is noted,
+    /// and at most once a second what is there now (the results of the
+    /// dispatches before, copied back) is logged as 32-bit floats: how many
+    /// are -10000 ("no water here"), zero, and the rest's range.
+    fn watch_water(&self, p: &HostPipeline) {
+        static HASH: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+        let Some(hash) = HASH
+            .get_or_init(|| {
+                let h = std::env::var("VICTORY_WATCH_HASH").unwrap_or_else(|_| "92b4790eb4c29f6d".into());
+                (h.trim() != "0").then(|| h.trim().to_owned())
+            })
+            .as_ref()
+        else {
+            return;
+        };
+        let Some(stage) = p.stages.first().filter(|s| &s.shader.hash == hash) else {
+            return;
+        };
+        static LAST: AtomicU64 = AtomicU64::new(0);
+        static SEEN: AtomicU64 = AtomicU64::new(0);
+        SEEN.fetch_add(1, Ordering::Relaxed);
+        let now = crate::host::now_ms();
+        let last = LAST.load(Ordering::Relaxed);
+        if now < last + 1000 || LAST.compare_exchange(last, now, Ordering::Relaxed, Ordering::Relaxed).is_err() {
+            return;
+        }
+        for u in stage.translated().used.iter().filter(|u| u.kind == ResourceType::Uav && u.root == RootType::Table) {
+            let Some(Root::Table(table)) = self.roots_ref(true).get(usize::from(u.slot)) else {
+                tracing::info!(slot = u.slot, "water watch: no table bound");
+                continue;
+            };
+            let Some(view) = crate::descriptor::view(table + u64::from(u.table_offset_dwords) * 4) else {
+                tracing::info!(slot = u.slot, offset = u.table_offset_dwords, "water watch: no view (null)");
+                continue;
+            };
+            let Some((address, len)) = crate::descriptor::host::buffer_range(&view) else {
+                tracing::info!(slot = u.slot, offset = u.table_offset_dwords, "water watch: not a buffer view");
+                continue;
+            };
+            let n = (len.min(64 * 1024) / 4) as usize;
+            let mut words = vec![0u32; n];
+            crate::host::copy_mapped(words.as_mut_ptr().cast(), address as *const u8, n * 4, false);
+            let floats: Vec<f32> = words.iter().map(|&w| f32::from_bits(w)).collect();
+            let none = floats.iter().filter(|&&f| f <= -9999.0).count();
+            let zero = words.iter().filter(|&&w| w == 0).count();
+            let rest: Vec<f32> = floats.iter().copied().filter(|&f| f > -9999.0 && f != 0.0 && f.is_finite()).collect();
+            let (lo, hi) = rest.iter().fold((f32::MAX, f32::MIN), |(a, b), &f| (a.min(f), b.max(f)));
+            tracing::info!(
+                dispatches = SEEN.swap(0, Ordering::Relaxed),
+                slot = u.slot,
+                offset = u.table_offset_dwords,
+                address = format_args!("{address:#x}"),
+                len,
+                n,
+                none,
+                zero,
+                other = rest.len(),
+                lo,
+                hi,
+                first = ?&floats[..n.min(8)],
+                "water watch: what the height look-ups' results hold in title memory"
+            );
         }
     }
 
