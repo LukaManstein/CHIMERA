@@ -1,4 +1,31 @@
-# Running CHIMERA (branch `turbo-next`)
+# Running CHIMERA
+
+## Which build is mine?
+
+| Your graphics card | Take | What it is |
+|---|---|---|
+| **NVIDIA** RTX 20xx / 30xx / 40xx / 50xx | **CHIMERA (NVIDIA) — `stable-nvidia-…` release** | tested builds; the installer and the shortcut use these |
+| NVIDIA, want the newest | branch `next-nvidia` (= `turbo-next`) | today's work, not yet tested as long |
+| **AMD** Radeon | not CHIMERA for now: [Belobug/VIctory-Belobug-AMD](https://github.com/Belobug/VIctory-Belobug-AMD) | CHIMERA has not been run on AMD |
+
+## The easy way: installer + desktop shortcut
+
+In **PowerShell** (not as administrator):
+
+```powershell
+irm https://raw.githubusercontent.com/LukaManstein/CHIMERA/turbo-next/scripts/install.ps1 | iex
+```
+
+It checks Git, Rust and the Visual Studio C++ build tools (and offers to install the
+missing ones with `winget`), downloads CHIMERA into `%LOCALAPPDATA%\CHIMERA`, builds the
+newest `stable-nvidia` release, asks for the folder of your own copy of the title,
+translates the shaders ahead of time and puts **CHIMERA (NVIDIA)** on the desktop.
+
+**Every start from the shortcut checks GitHub for a newer `stable-nvidia` release** and
+asks before updating (an update rebuilds and translates the shaders again). Without a
+connection it just starts the installed build.
+
+## By hand (branch `turbo-next`)
 
 CHIMERA runs an Xbox Series title natively on Windows from **your own copy** of it.
 Nothing of the title is in this repository, and there is no ready-made download:
