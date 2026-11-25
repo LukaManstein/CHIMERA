@@ -44,6 +44,23 @@ autosave. In the world: median **3.5–3.8 fps**, 4.3–5.8 in lighter scenes, p
 Shaders are translated ahead of time with `victory warm <game>\shaders.rpf` (~4 min on 16 threads); the card's pipelines
 are built in the first session and kept on disk.
 
+### Compared on this PC (NVIDIA RTX 3080 Ti, Windows 10)
+
+The race leader [Belobug/VIctory-Belobug-AMD](https://github.com/Belobug/VIctory-Belobug-AMD) (`71652a2`) built
+here with only the Windows 10 Agility SDK commit added, the author's settings, same save, same machine:
+
+| | `turbo` (CHIMERA) | Belobug (`71652a2` + Agility) |
+|---|---|---|
+| Shaders that do not translate for this card (of 25,889) | **208** | 559 — mostly wave64 programs on a 32-lane card |
+| Pipelines the NVIDIA driver's compiler crashed on | 0 | 5 (left out) |
+| GPU time per frame in the world | ~33 ms | ~700 ms while its pipelines were still being built |
+| Frame rate in the world | **3.5–4 fps** median | ~1 fps while its pipelines were still being built |
+
+Belobug is tuned for AMD RDNA (32- and 64-lane waves) and its author reports 3–5 fps on an RX 9070 XT; this table
+only says how it runs on an NVIDIA card. Its ambient-light idea is in `turbo` (`VICTORY_AMBIENT`). To make the
+comparison fair it got a small `translate --warm` command (every shader into its cache ahead of the run, 434 s
+on 16 threads), so neither build translated shaders during play.
+
 ## Status (main branch, victory-perf base)
 
 Measured on **Windows 10 LTSC 21H2 · AMD Ryzen 7 2700 · NVIDIA RTX 3080 Ti 12 GB · 32 GB RAM**
