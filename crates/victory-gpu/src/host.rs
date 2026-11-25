@@ -2498,6 +2498,8 @@ enum Step {
 /// the upload buffers its GPU commands read, kept until the list is reset.
 #[derive(Default)]
 struct Deferred {
+    /// A window may be reused across draws until recorded work can change its inputs.
+    indirect_window: bool,
     /// Destination, source, bytes.
     copies: Vec<Step>,
     uploads: Vec<ID3D12Resource>,
@@ -4323,6 +4325,21 @@ fn late_line(frames: f64) {
 mod late_tests {
     use super::{continues, join_ranges, touches};
 
+    #[test]
+    fn indirect_window_ends_at_a_copy_or_unknown_writer() {
+        let list = super::host().unwrap().new_list().unwrap();
+        assert!(list.new_indirect_window());
+        assert!(!list.new_indirect_window());
+        // Recording the steps does not dereference the synthetic addresses.
+        list.defer_copy(0x4000 as *mut u8, 0x6000 as *const u8, 4);
+        assert!(list.new_indirect_window());
+        list.defer_copy(0x4004 as *mut u8, 0x6004 as *const u8, 4);
+        assert!(list.new_indirect_window());
+        list.defer(|| {});
+        assert!(list.new_indirect_window());
+        assert!(!list.new_indirect_window());
+    }
+
     /// Copies join only when both ends continue and the whole does not
     /// overlap itself.
     #[test]
@@ -4667,6 +4684,29 @@ impl Host {
         // SAFETY: live DXGI adapter3 and valid out-struct.
         unsafe { adapter.QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &mut info) }.ok()?;
         Some((info.CurrentUsage >> 20).min(u64::from(u32::MAX)) as u32)
+    }
+
+    /// Whether the host GPU lets a view of a typed texture use another
+    /// format of the same family (D3D12's relaxed casting rules, reported
+    /// in Options3); logged once.
+    pub(crate) fn typed_format_casting(&self) -> bool {
+        static CASTING: OnceLock<bool> = OnceLock::new();
+        *CASTING.get_or_init(|| {
+            let mut options = D3D12_FEATURE_DATA_D3D12_OPTIONS3::default();
+            // SAFETY: writes `options` of the given size.
+            let ok = unsafe {
+                self.device
+                    .CheckFeatureSupport(
+                        D3D12_FEATURE_D3D12_OPTIONS3,
+                        (&raw mut options).cast(),
+                        size_of_val(&options) as u32,
+                    )
+                    .is_ok()
+            };
+            let supported = ok && options.CastingFullyTypedFormatSupported.as_bool();
+            tracing::info!(supported, "host typed format casting support");
+            supported
+        })
     }
 
     /// A new list, open for recording.
@@ -8033,6 +8073,7 @@ impl HostList {
     /// Copies `len` bytes from `src` to `dst` when the list is submitted.
     pub(crate) fn defer_copy(&self, dst: *mut u8, src: *const u8, len: usize) {
         let mut deferred = self.deferred();
+        deferred.indirect_window = false;
         COPIES_JOINED[0].fetch_add(1, Ordering::Relaxed);
         // A copy that goes on where the one recorded just before it ended,
         // source and destination both: with `join_copies` the two are one
@@ -8089,7 +8130,9 @@ impl HostList {
         address: usize,
         len: usize,
     ) {
-        self.deferred()
+        let mut deferred = self.deferred();
+        deferred.indirect_window = false;
+        deferred
             .copies
             .push(Step::GpuWrite(shadow.clone(), address, len));
     }
@@ -8362,6 +8405,10 @@ impl HostList {
         if let Ok(object) = object.cast::<windows::core::IUnknown>() {
             self.deferred().kept.push(object);
         }
+    }
+
+    pub(crate) fn new_indirect_window(&self) -> bool {
+        !std::mem::replace(&mut self.deferred().indirect_window, true)
     }
 
     /// Whether this is the first time since the reset that the list asks

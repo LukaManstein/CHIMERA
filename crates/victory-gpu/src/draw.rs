@@ -898,6 +898,8 @@ struct Fresh {
     n: u32,
     at: usize,
     first: u32,
+    /// A slot of it is a CBV backed by this list's scratch (`State::replay`).
+    cbv: bool,
 }
 
 /// A hash that is mixed already, used as it is.
@@ -1274,6 +1276,12 @@ impl State {
         self.host_pipeline = 0;
         self.host_roots = [0; 2];
         self.host_heaps = [0; 2];
+        // Cached tables containing CBVs reference the previous part's
+        // `HostList::scratch` upload memory and only registered `defer_fill`
+        // on that part, which resets once it finishes — evict them so the
+        // continuing part allocates its own scratch and refreshes constants.
+        // `self.dynamic` stays intact until the final part's state drops.
+        self.fresh_tables.retain(|_, f| !f.cbv);
         if self.topology_set {
             self.set_topology(list, self.topology);
         }
@@ -2742,7 +2750,7 @@ impl State {
                 if mapped == 0 {
                     HEAP_TEXTURES_AWAY.fetch_add(1, Ordering::Relaxed);
                     // Streamed out: what the slot showed is let go.
-                    host.texture_slot_gone(index);
+                    host.texture_slot_gone(index, write);
                     host.texture_slot_later(index, write, frame, most);
                     continue;
                 }
@@ -3948,7 +3956,7 @@ impl State {
             clock.lap(21);
             let at = self.fresh_records.len();
             self.fresh_records.extend((0..n).map(|k| record(table, k)));
-            self.fresh_tables.insert(key, Fresh { table, n, at, first });
+            self.fresh_tables.insert(key, Fresh { table, n, at, first, cbv: false });
             if !spans.is_empty() {
                 staged.push((table, n));
             }
@@ -3959,11 +3967,13 @@ impl State {
             let title_first = heap.index(table).filter(|first| first + n <= host.count());
             // The whole range: a shader may index past the entries its
             // used-resource list names (descriptor arrays).
+            let mut has_cbv = false;
             for k in 0..n {
                 let index = first + k;
                 let used = entries.iter().find(|u| u.table_offset_dwords / 8 == k);
                 match crate::descriptor::view(table + u64::from(k) * 32) {
                     Some(View::Constant(address, size)) => {
+                        has_cbv = true;
                         let size = crate::descriptor::host::constant_view_bytes(size);
                         if size == 0 || address == 0 {
                             host.constant_at(index, 0, 0);
@@ -4035,6 +4045,9 @@ impl State {
                         }
                     }
                 }
+            }
+            if has_cbv && let Some(f) = self.fresh_tables.get_mut(&key) {
+                f.cbv = true;
             }
             made.push((slot, first * 32));
         }
