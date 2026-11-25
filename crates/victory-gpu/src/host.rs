@@ -6396,6 +6396,7 @@ impl Host {
             }
             let _ = p.swap_chain.Present(0, DXGI_PRESENT(0));
             p.meter.frame(p.hwnd);
+            fullscreen_after_frames(p.hwnd);
             #[cfg(feature = "diagnostics")]
             return Some(probe.is_some_and(|b| crate::capture::black(&b)));
             #[cfg(not(feature = "diagnostics"))]
@@ -6433,9 +6434,6 @@ impl Host {
             let swap_chain = factory
                 .CreateSwapChainForHwnd(&self.queue, hwnd, &desc, None, None)?
                 .cast::<IDXGISwapChain3>()?;
-            if fullscreen_wanted() {
-                borderless_fullscreen(hwnd);
-            }
             let copy = self.new_list()?;
             copy.close();
             tracing::info!(width, height, format = format.0, "presenting to a window");
@@ -6779,24 +6777,50 @@ fn fullscreen_wanted() -> bool {
     std::env::var_os("VICTORY_FULLSCREEN").is_some_and(|v| v == "1")
 }
 
-/// Makes `hwnd` (ours or the title's) a borderless window over the whole
-/// primary screen.
+/// Presents before the window is made to cover the screen: the title's own
+/// window handles size messages badly while it starts (changing it right
+/// after the swap chain is made crashed it in `Game Init`).
+const FULLSCREEN_AFTER_PRESENTS: u32 = 300;
+
+/// Counts presents and, once, at [`FULLSCREEN_AFTER_PRESENTS`], makes the
+/// presenting window cover the screen when [`fullscreen_wanted`].
+fn fullscreen_after_frames(hwnd: HWND) {
+    use std::sync::atomic::{AtomicU32, Ordering::Relaxed};
+    static PRESENTS: AtomicU32 = AtomicU32::new(0);
+    if PRESENTS.fetch_add(1, Relaxed) + 1 == FULLSCREEN_AFTER_PRESENTS && fullscreen_wanted() {
+        borderless_fullscreen(hwnd);
+    }
+}
+
+/// Makes `hwnd` (ours or the title's) cover the whole primary screen with
+/// its client area. The style is left as it is (changing it sends the
+/// window messages it must answer at once); the frame is moved past the
+/// screen's edges instead, by a move posted to the window's own thread
+/// rather than waited for.
 fn borderless_fullscreen(hwnd: HWND) {
-    // SAFETY: plain calls on a live window; the move is posted to the
-    // window's own thread rather than waited for.
+    // SAFETY: plain calls on a live window; none of them waits for the
+    // window's thread.
     unsafe {
         let (width, height) = (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN));
-        SetWindowLongPtrW(hwnd, GWL_STYLE, (WS_POPUP | WS_VISIBLE).0 as isize);
+        let style = WINDOW_STYLE(GetWindowLongW(hwnd, GWL_STYLE) as u32);
+        let ex_style = WINDOW_EX_STYLE(GetWindowLongW(hwnd, GWL_EXSTYLE) as u32);
+        let mut rect = RECT {
+            left: 0,
+            top: 0,
+            right: width,
+            bottom: height,
+        };
+        let _ = AdjustWindowRectEx(&mut rect, style, false, ex_style);
         let moved = SetWindowPos(
             hwnd,
             Some(HWND_TOP),
-            0,
-            0,
-            width,
-            height,
-            SWP_FRAMECHANGED | SWP_SHOWWINDOW | SWP_ASYNCWINDOWPOS,
+            rect.left,
+            rect.top,
+            rect.right - rect.left,
+            rect.bottom - rect.top,
+            SWP_ASYNCWINDOWPOS | SWP_NOACTIVATE,
         );
-        tracing::info!(width, height, ok = moved.is_ok(), "borderless fullscreen (VICTORY_FULLSCREEN=1)");
+        tracing::info!(width, height, ok = moved.is_ok(), "fullscreen: the window's picture covers the screen (VICTORY_FULLSCREEN=1)");
     }
 }
 
