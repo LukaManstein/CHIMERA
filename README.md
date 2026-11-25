@@ -59,7 +59,7 @@ scripts\chimera-turbo.cmd
 
 > **2026-11-25: playable (slowly) — the boat chase of "Gone Fishing" played through** — the boat floats and is driven from the handover
 > to Jason on foot at the camp, in a 31-minute session without a crash, on an RTX 3080 Ti under **Windows 10**
-> (median 3.9 fps in the mission; [recording](https://files.catbox.moe/bm4agb.mp4)). The boat fix is
+> (median 3.9 fps in the mission; [recording](https://vimeo.com/share/28c69e71-0bed-4f73-8a9e-d9b476d70db8)). The boat fix is
 > [Geckomacabre/vx-layer `eee5667d`](https://github.com/Geckomacabre/vx-layer/commit/eee5667d7119bc4a378214621e1b18a814ebe80f)
 > (textures shaders write that the CPU reads are copied back to title memory), cherry-picked into `turbo`;
 > how the bug was narrowed down is on [fxceless/victory-fork#863](https://github.com/fxceless/victory-fork/issues/863).
