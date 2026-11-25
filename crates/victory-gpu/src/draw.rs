@@ -935,9 +935,14 @@ impl State {
         dword: u32,
         memory: Option<&crate::memory::Ready>,
     ) -> u32 {
-        use victory_shader::emit::{USER_MEMORY_BASE, USER_VIEW_ADDRESS, USER_VIEW_BIAS};
+        use victory_shader::emit::{
+            USER_DISPATCH_THREADS_X, USER_MEMORY_BASE, USER_VIEW_ADDRESS, USER_VIEW_BIAS,
+        };
+        if kind == USER_DISPATCH_THREADS_X {
+            return 0;
+        }
         if kind == USER_MEMORY_BASE {
-            return memory.map_or(0, |m| m.base);
+            return memory.map_or(0, |m| if dword == 0 { m.base } else { m.count });
         }
         if kind == USER_VIEW_BIAS {
             // The view begins on 16 bytes of the copy the address finds
@@ -1172,7 +1177,10 @@ impl State {
                 && !crate::pipeline::builder_quarantined(self.pipeline as This);
             // Title memory by address: what the shader finds it by.
             let memory = if t.host.root_srvs.contains(&victory_shader::emit::SLOT_MEMORY) {
-                let Some(ready) = self.memory_ready(list, compute, writes) else {
+                // The shader can read the scene through guest addresses and
+                // write its result to a texture or a separate root UAV.
+                let raw_writes = writes && (t.host.writes_guest_memory || !write_skip());
+                let Some(ready) = self.memory_ready(list, compute, raw_writes) else {
                     once!("a shader that reads title memory by address without a view heap to hold its views: the draw is dropped");
                     return false;
                 };
@@ -1324,7 +1332,9 @@ impl State {
                         None
                     }
                 };
-                if !self.root_uav(list, address, param, compute, writes) {
+                let writes_slot =
+                    writes && (!write_skip() || t.host.written_root_uavs.contains(&slot));
+                if !self.root_uav(list, address, param, compute, writes_slot) {
                     return false;
                 }
             }
@@ -2262,7 +2272,7 @@ impl State {
     }
 
     /// Runs a dispatch on the host.
-    pub(crate) fn dispatch(&mut self, list: &HostList, x: u32, y: u32, z: u32) {
+    pub(crate) fn dispatch(&mut self, list: &HostList, x: u32, y: u32, z: u32, flags: Option<u32>) {
         // It may write the arguments a window holds clamped.
         self.window = None;
         list.gather_close();
@@ -2314,10 +2324,34 @@ impl State {
             }
             return;
         }
+        let builder = crate::pipeline::is_builder(self.pipeline as This);
+        let thread_group = (builder && flags.unwrap_or(0) & 0x20 != 0)
+            .then(|| p.stages[0].translated().compute_threads)
+            .flatten();
+        let threads = [x, y, z];
+        let [x, y, z] = thread_group.map_or(threads, |size| {
+            std::array::from_fn(|i| threads[i].div_ceil(size[i]))
+        });
+        let tail = thread_group.and_then(|_| {
+            let stage = p.stages.first().filter(|_| p.compute)?;
+            let (param, _) = stage.user_data?;
+            let word = stage.translated().host.user_data.iter().find(|u| {
+                u.root == RootType::Other(victory_shader::emit::USER_DISPATCH_THREADS_X)
+            })?;
+            Some((param, word.index))
+        });
         #[cfg(feature = "diagnostics")]
         list.note_op(|| self.op_text(format!("dispatch {x}x{y}x{z}"), true));
-        // SAFETY: an open list with everything set.
-        unsafe { list.list.Dispatch(x, y, z) };
+        // SAFETY: an open list with everything set; `tail` names a declared root word.
+        unsafe {
+            if let Some((param, word)) = tail {
+                list.list.SetComputeRoot32BitConstant(param, threads[0], word);
+            }
+            list.list.Dispatch(x, y, z);
+            if let Some((param, word)) = tail {
+                list.list.SetComputeRoot32BitConstant(param, 0, word);
+            }
+        }
         DISPATCHED.fetch_add(1, Ordering::Relaxed);
         self.watch_water(list, p);
         // The least indirect light after the program that resolves it; its
@@ -2471,33 +2505,36 @@ impl State {
         }
     }
 
-    /// After a dispatch of `p`: the least indirect light, if it is the
-    /// program that resolves that (from Belobug/VIctory-Belobug-AMD).
-    fn ambient(&self, list: &HostList, p: &HostPipeline) -> bool {
+    /// After a dispatch of `p`: replaces the indirect diffuse light with a
+    /// depth-shaded ambient floor while ray tracing is off (`crate::ambient`).
+    fn ambient(&self, list: &HostList, p: &crate::pipeline::host::HostPipeline) -> bool {
         let Some(stage) = p.stages.first().filter(|s| s.shader.resolves_light) else {
             return false;
         };
-        let (slot, offset) = crate::ambient::LIGHT;
-        let Some(u) = stage.translated().used.iter().find(|u| {
-            u.kind == ResourceType::Uav
-                && u.root == RootType::Table
-                && (u.slot, u.table_offset_dwords) == (slot, offset)
-        }) else {
-            once!("no ambient light: other tables");
-            return false;
+        let view = |kind: ResourceType, (slot, offset): (u8, u32)| {
+            let u = stage.translated().used.iter().find(|u| {
+                u.kind == kind
+                    && u.root == RootType::Table
+                    && (u.slot, u.table_offset_dwords) == (slot, offset)
+            })?;
+            let Some(Root::Table(table)) = self.roots_ref(true).get(usize::from(u.slot)) else {
+                return None;
+            };
+            crate::descriptor::view(table + u64::from(u.table_offset_dwords) * 4)
         };
-        let Some(Root::Table(table)) = self.roots_ref(true).get(usize::from(u.slot)) else {
-            return false;
-        };
-        let light = match crate::descriptor::view(table + u64::from(u.table_offset_dwords) * 4) {
+        let light = match view(ResourceType::Uav, crate::ambient::LIGHT) {
             Some(View::Unordered(r, ..)) => r,
             _ => 0,
         };
         if light == 0 {
-            once!("no ambient light: no view");
+            once!("no ambient light: other tables");
             return false;
         }
-        crate::ambient::raise(list, light as This)
+        let depth = match view(ResourceType::Srv, crate::ambient::DEPTH) {
+            Some(View::Shader(r, _)) => Some(r as This),
+            _ => None,
+        };
+        crate::ambient::raise(list, light as This, depth)
     }
 
     /// What a draw or dispatch runs, for the device-removed report
@@ -3032,6 +3069,11 @@ impl State {
                 let used = entries.iter().find(|u| u.table_offset_dwords / 8 == k);
                 match crate::descriptor::view(table + u64::from(k) * 32) {
                     Some(View::Constant(address, size)) => {
+                        let size = crate::descriptor::host::constant_view_bytes(size);
+                        if size == 0 || address == 0 {
+                            host.constant_at(index, 0, 0);
+                            continue;
+                        }
                         let Some((gpu, to)) = list.scratch(u64::from(size)) else {
                             host.make_null(index);
                             continue;

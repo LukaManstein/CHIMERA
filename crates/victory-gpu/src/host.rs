@@ -3780,6 +3780,18 @@ impl Host {
         })
     }
 
+    /// Whether the device runs on a software adapter (WARP) or no DXGI adapter
+    /// handle was retained (e.g. headless CI WARP runners).
+    #[cfg(test)]
+    pub(crate) fn is_software_adapter(&self) -> bool {
+        self.adapter.as_ref().is_none_or(|a| {
+            // SAFETY: live DXGI adapter.
+            unsafe { a.GetDesc1() }.is_ok_and(|d| {
+                d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32 != 0 || d.VendorId == 0x1414
+            })
+        })
+    }
+
     /// A new list, open for recording.
     pub(crate) fn new_list(&self) -> windows::core::Result<HostList> {
         #[cfg(feature = "diagnostics")]
