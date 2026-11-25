@@ -27,6 +27,22 @@ point: it is stitched together from the best parts of many people's work.
 
 ## How to run it
 
+| Your graphics card | Take |
+|---|---|
+| **NVIDIA** RTX 20xx–50xx | **CHIMERA (NVIDIA)** — the installer below; it uses the tested `stable-nvidia-…` releases |
+| NVIDIA, newest work | branch `next-nvidia` |
+| **AMD** Radeon | not tested on CHIMERA yet — see [Belobug/VIctory-Belobug-AMD](https://github.com/Belobug/VIctory-Belobug-AMD) |
+
+**Installer + desktop shortcut** (PowerShell, not as administrator):
+
+```powershell
+irm https://raw.githubusercontent.com/LukaManstein/CHIMERA/turbo-next/scripts/install.ps1 | iex
+```
+
+It installs what is missing (Git, Rust, the C++ build tools), builds CHIMERA, asks for the folder of your own copy
+of the title, translates the shaders and puts **CHIMERA (NVIDIA)** on the desktop. Every start checks for a newer
+`stable-nvidia` release and asks before updating.
+
 **Step by step: [docs/CHIMERA.md on branch `turbo-next`](https://github.com/LukaManstein/CHIMERA/blob/turbo-next/docs/CHIMERA.md)** — what you need, build, shader warm-up, play, keyboard, troubleshooting. In short:
 
 ```bat
