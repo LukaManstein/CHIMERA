@@ -664,6 +664,17 @@ fn wake_decoder() {
             std::thread::Builder::new()
                 .name("victory XMA decoder".into())
                 .spawn(|| {
+                    // Ahead of the layer's own workers (pipeline builders at
+                    // normal priority, the wide copy threads): a pass is a
+                    // fraction of a millisecond, but one that waits behind
+                    // them leaves the rings dry and the sound crackles
+                    // (`VICTORY_XMA_PRIORITY=0`: normal, as before).
+                    #[cfg(windows)]
+                    if std::env::var_os("VICTORY_XMA_PRIORITY").is_none_or(|v| v != "0") {
+                        use windows_sys::Win32::System::Threading::{GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_TIME_CRITICAL};
+                        // SAFETY: a plain call on our own thread.
+                        unsafe { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL) };
+                    }
                     loop {
                         xma().pump();
                         // A 256-byte output block lasts 2.7 ms at 48 kHz mono.
