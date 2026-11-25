@@ -103,6 +103,15 @@ pub const USER_VIEW_BIAS: u32 = 0x103;
 /// global X index is at or past it do nothing. The metadata `dword` holds
 /// the group's X width.
 pub const USER_DISPATCH_THREADS_X: u32 = 0x104;
+/// `RootType::Other` code of a user-data dword the host gives: the
+/// group to start counting from in x, added to a compute program's group
+/// id in x. A host dispatch runs at most 65,535 groups in each dimension,
+/// and the console's more (the depth-of-field blur asks for up to 115,200,
+/// one per tile of each of its two layers): the host runs such a dispatch
+/// as several, each with its first group here. 0 for any other dispatch.
+/// Not asked by programs with a spilled user-data table (their root
+/// signature is close to the host's 64 dwords).
+pub const USER_GROUP_BASE: u32 = 0x105;
 
 /// `ShaderFlags` bits (metadata) and their `SFI0` feature bits.
 pub(crate) mod flags {
