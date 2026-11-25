@@ -2141,7 +2141,7 @@ impl State {
         // SAFETY: an open list with everything set.
         unsafe { list.list.Dispatch(x, y, z) };
         DISPATCHED.fetch_add(1, Ordering::Relaxed);
-        self.watch_water(p);
+        self.watch_water(list, p);
         // The least indirect light after the program that resolves it; its
         // pass sets its own heap, root signature and pipeline, so the next
         // draw or dispatch binds the title's again.
@@ -2159,7 +2159,7 @@ impl State {
     /// and at most once a second what is there now (the results of the
     /// dispatches before, copied back) is logged as 32-bit floats: how many
     /// are -10000 ("no water here"), zero, and the rest's range.
-    fn watch_water(&self, p: &HostPipeline) {
+    fn watch_water(&self, list: &HostList, p: &HostPipeline) {
         static HASH: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
         let Some(hash) = HASH
             .get_or_init(|| {
@@ -2173,6 +2173,23 @@ impl State {
         let Some(stage) = p.stages.first().filter(|s| &s.shader.hash == hash) else {
             return;
         };
+        // Every dispatch: where its results go, and on which list, for
+        // `water_copy` to tell copies of them apart.
+        WATER_LIST.store(std::ptr::from_ref(list) as u64, Ordering::Relaxed);
+        for u in stage.translated().used.iter().filter(|u| u.kind == ResourceType::Uav && u.root == RootType::Table) {
+            if let Some(Root::Table(table)) = self.roots_ref(true).get(usize::from(u.slot))
+                && let Some(view) = crate::descriptor::view(table + u64::from(u.table_offset_dwords) * 4)
+                && let Some(range) = crate::descriptor::host::buffer_range(&view)
+            {
+                let mut w = WATER.lock().unwrap_or_else(|e| e.into_inner());
+                if !w.contains(&range) {
+                    w.push(range);
+                    if w.len() > 16 {
+                        w.remove(0);
+                    }
+                }
+            }
+        }
         static LAST: AtomicU64 = AtomicU64::new(0);
         static SEEN: AtomicU64 = AtomicU64::new(0);
         SEEN.fetch_add(1, Ordering::Relaxed);
@@ -3597,4 +3614,45 @@ pub(crate) fn depth_bounds(list: &HostList, min: f32, max: f32) {
         // SAFETY: an open list on a device that supports depth bounds.
         unsafe { l1.OMSetDepthBounds(min, max) };
     }
+}
+
+
+/// The title memory the watched water program's results were written to
+/// lately ([`State::watch_water`]), and the list of its last dispatch.
+static WATER: std::sync::Mutex<Vec<(u64, u64)>> = std::sync::Mutex::new(Vec::new());
+static WATER_LIST: AtomicU64 = AtomicU64::new(0);
+
+/// Diagnostics (`VICTORY_WATCH_HASH`): a title copy (`what`) recorded on
+/// `list` from `[src, src + len)` to `dst`. Copies run on the CPU when the
+/// list is submitted, before the card runs it: a copy of the water results
+/// recorded on the same list as their dispatch takes the bytes from before
+/// it. Logged at most once a second, with how many there were.
+pub(crate) fn water_copy(what: &'static str, list: u64, dst: u64, src: u64, len: u64) {
+    let hit = {
+        let w = WATER.lock().unwrap_or_else(|e| e.into_inner());
+        w.iter().any(|&(a, n)| src < a + n && a < src + len)
+    };
+    if !hit {
+        return;
+    }
+    static COUNT: [AtomicU64; 2] = [AtomicU64::new(0), AtomicU64::new(0)];
+    let same = list == WATER_LIST.load(Ordering::Relaxed);
+    COUNT[usize::from(same)].fetch_add(1, Ordering::Relaxed);
+    static LAST: AtomicU64 = AtomicU64::new(0);
+    let now = crate::host::now_ms();
+    let last = LAST.load(Ordering::Relaxed);
+    if now < last + 1000 || LAST.compare_exchange(last, now, Ordering::Relaxed, Ordering::Relaxed).is_err() {
+        return;
+    }
+    let [other, on_same] = [0, 1].map(|i| COUNT[i].swap(0, Ordering::Relaxed));
+    tracing::info!(
+        what,
+        src = format_args!("{src:#x}"),
+        dst = format_args!("{dst:#x}"),
+        len,
+        same_list_as_the_dispatch = same,
+        copies_on_the_dispatch_list = on_same,
+        copies_on_other_lists = other,
+        "water watch: a title copy reads the height look-ups' results"
+    );
 }

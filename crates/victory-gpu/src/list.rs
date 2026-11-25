@@ -826,6 +826,7 @@ extern "system" fn copy_buffer_region(
         && let Some(to) = buffer_range(dst, dst_offset, len)
         && let Some(from) = buffer_range(src, src_offset, len)
     {
+        crate::draw::water_copy("CopyBufferRegion", std::ptr::from_ref(list) as u64, to as u64, from as u64, len);
         list.defer_copy(to, from, len as usize);
     }
     #[cfg(not(windows))]
@@ -1311,6 +1312,7 @@ extern "system" fn copy_memory(this: This, dst: u64, src: u64, len: u64, _flags:
         && dst != 0
         && src != 0
     {
+        crate::draw::water_copy("CopyMemoryToMemoryX", std::ptr::from_ref(list) as u64, dst, src, len);
         let len = len as usize;
         list.defer(move || {
             if crate::texture::committed(src as *const u8, len)
