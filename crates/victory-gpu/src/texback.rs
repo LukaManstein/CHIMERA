@@ -73,6 +73,27 @@ pub(crate) fn record(list: &ID3D12GraphicsCommandList, resource: This, texture: 
     let (layout, at, size) = crate::resource::title_texture(resource)?;
     // SAFETY: a live texture.
     let desc = unsafe { texture.GetDesc() };
+    // A layout `land` cannot tile (an XOR mode, or several samples: no
+    // console address for them yet, as for uploads) is not copied at all:
+    // it was read back every list and thrown away at `land` ("could not be
+    // tiled"), the card's copy and the CPU's mapping spent for nothing.
+    if !layout.addressable() {
+        static SKIPPED: std::sync::Mutex<Vec<(u64, u32, u32)>> = std::sync::Mutex::new(Vec::new());
+        let kind = (desc.Width, desc.Height, desc.Format.0 as u32);
+        let mut skipped = SKIPPED.lock().unwrap_or_else(|e| e.into_inner());
+        if !skipped.contains(&kind) {
+            skipped.push(kind);
+            tracing::warn!(
+                width = desc.Width,
+                height = desc.Height,
+                format = desc.Format.0,
+                swizzle = layout.desc.swizzle.0,
+                samples = layout.desc.samples,
+                "texture of a copied-back kind in a layout with no console address (XOR or multisampled): not copied back"
+            );
+        }
+        return None;
+    }
     let mips = u32::from(desc.MipLevels.max(1));
     let subresources = mips * u32::from(desc.DepthOrArraySize.max(1));
     let n = subresources as usize;
