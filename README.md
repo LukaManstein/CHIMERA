@@ -53,8 +53,9 @@ here with only the Windows 10 Agility SDK commit added, the author's settings, s
 |---|---|---|
 | Shaders that do not translate for this card (of 25,889) | **208** | 559 — mostly wave64 programs on a 32-lane card |
 | Pipelines the NVIDIA driver's compiler crashed on | 0 | 5 (left out) |
-| GPU time per frame in the world | ~33 ms | ~700 ms while its pipelines were still being built |
-| Frame rate in the world | **3.5–4 fps** median | ~1 fps while its pipelines were still being built |
+| Draws dropped per frame in the world | ~100 | ~1,370 of ~2,770 (pipelines still being built after 10 minutes) |
+| Frame rate in the world | **3.5–4 fps** median | 1.4 fps median (~700 ms a frame) |
+| What it looked like | lit, playable with keyboard/pad into Chapter 1 | nearly black, controls did not respond, the boat mission did not work either (as in ours: victory-fork #863) |
 
 Belobug is tuned for AMD RDNA (32- and 64-lane waves) and its author reports 3–5 fps on an RX 9070 XT; this table
 only says how it runs on an NVIDIA card. Its ambient-light idea is in `turbo` (`VICTORY_AMBIENT`). To make the
