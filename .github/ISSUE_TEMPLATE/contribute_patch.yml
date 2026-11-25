@@ -1,0 +1,26 @@
+name: Contribute a fix / patch
+description: Attach a .patch or .diff file if you do not want to open a pull request.
+title: "Patch: "
+labels: ["contribution"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What it fixes
+      description: The problem, and what changes. Upstream or fork commits it is based on, with links.
+    validations:
+      required: true
+  - type: textarea
+    id: tested
+    attributes:
+      label: How you tested it
+      description: Card, driver, Windows version, branch/commit you started from; numbers or log lines before and after.
+    validations:
+      required: true
+  - type: textarea
+    id: patch
+    attributes:
+      label: The patch
+      description: Drag the .patch / .diff file here (or paste it).
+    validations:
+      required: true

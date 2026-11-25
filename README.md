@@ -179,6 +179,7 @@ Keyboard (when no pad is connected): **WASD** left stick · **IJKL** right stick
 
 ## Community
 
+**Want to help?** Fixes and test reports from anyone are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md) (fork → pull request into `next-nvidia`, or attach a `.patch` to an issue).
 Bugs go to [Issues](https://github.com/LukaManstein/CHIMERA/issues) (use the form).
 Never post game files, keys, executables or links to them — anywhere.
 
