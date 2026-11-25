@@ -101,6 +101,16 @@ impl<'a> Lower<'a> {
             return Err("a ray-tracing node test's result");
         };
         let site = (b, i);
+        // `VICTORY_BVH_MISS=1` (see [`super::bvh_miss`]): a miss for every
+        // node, in every lane the instruction runs in.
+        if crate::emit::bvh_miss() {
+            let guard = self.guard(b, i)?;
+            let none = self.s.m.i32(u32::MAX);
+            for k in 0..4 {
+                self.write(inst, Reg::V(dst + k as u8), none, guard);
+            }
+            return Ok(());
+        }
         let nodes = self
             .x
             .res

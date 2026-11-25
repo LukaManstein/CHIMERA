@@ -210,6 +210,27 @@ pub fn shader_opt() -> u32 {
 /// wave, view heap limit) and the settings above. The shader cache keys on
 /// this instead of on the whole executable, so a rebuild that leaves the
 /// translator alone keeps its translations. Call it after the device is made.
+/// `VICTORY_BVH_MISS=1`: every ray-tracing node test misses, while the
+/// structure builder is off (`VICTORY_BVH_BUILDER` not `1`). The title's
+/// structures are then never built, and its tracing programs read what title
+/// memory holds there: zeros read as a triangle at the origin, so rays come
+/// back hit and the light that needs them (bounce light, sky light, shadows
+/// of lamps) comes out black or wrong. A miss, all ones in each result dword,
+/// works for both node kinds: a box node with four invalid children, and a
+/// triangle whose distance is a NaN (no comparison takes it). Every ray then
+/// escapes to the title's miss path (sky and far-field light).
+/// shortcut: the scene seen as empty, not as it is; gone once the builder runs.
+/// From Geckomacabre/vx-layer bdef933, after Flamingo (realblastex/flamingo,
+/// `FLAMINGO_BVH_MISS`), GPL-3.0-or-later. Part of the translation: the
+/// switch is in the fingerprint below, as every `VICTORY_` name here is.
+pub fn bvh_miss() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        let on = |name: &str| std::env::var(name).ok().as_deref().map(str::trim) == Some("1");
+        on("VICTORY_BVH_MISS") && !on("VICTORY_BVH_BUILDER")
+    })
+}
+
 pub fn translation_fingerprint() -> Vec<u8> {
     let mut out = Vec::new();
     out.extend_from_slice(env!("VICTORY_SHADER_SOURCE_HASH").as_bytes());
