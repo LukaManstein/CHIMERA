@@ -1304,6 +1304,29 @@ extern "system" fn present(
     hr
 }
 
+/// The second plane's host copy, its GPU state, and the title resource, when
+/// the present carries one (`crate::compose`). The state is left in
+/// `COPY_SOURCE` for the compose pass; the caller restores it after showing.
+#[cfg(windows)]
+fn second_plane(
+    planes: u32,
+    plane_parameters: *const Plane,
+) -> Option<(This, std::sync::Arc<crate::resource::HostTexture>, u32)> {
+    if planes < 2 || plane_parameters.is_null() {
+        return None;
+    }
+    // SAFETY: the title passes `planes` plane descriptions.
+    let plane = unsafe { plane_parameters.add(1).as_ref() }?;
+    if plane.count == 0 || plane.resources.is_null() {
+        return None;
+    }
+    // SAFETY: the plane lists `count` resources.
+    let resource = unsafe { *plane.resources };
+    let copy = crate::resource::host_copy(resource)?;
+    let (_, before) = crate::resource::host_transition(resource, 0x800)?;
+    Some((resource, copy, before))
+}
+
 fn present_now(this: This, planes: u32, plane_parameters: *const Plane) -> HRESULT {
     #[cfg(windows)]
     let presenting = std::time::Instant::now();
@@ -1404,7 +1427,14 @@ fn present_now(this: This, planes: u32, plane_parameters: *const Plane) -> HRESU
         const COPY_SOURCE: u32 = 0x800;
         let state = crate::resource::host_transition(resource, COPY_SOURCE)
             .map_or(COPY_SOURCE, |(_, before)| before);
-        let shown = host.present(texture, state, frame);
+        let second = second_plane(planes, plane_parameters);
+        let over = second
+            .as_ref()
+            .map(|(_, copy, before)| (&copy.texture, *before));
+        let shown = host.present_over(texture, state, over, frame);
+        if let Some((resource, _, before)) = second {
+            crate::resource::host_transition(resource, before);
+        }
         crate::resource::host_transition(resource, state);
         #[cfg(feature = "diagnostics")]
         blinks(frame, resource, state, shown);

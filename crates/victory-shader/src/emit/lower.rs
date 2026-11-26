@@ -568,58 +568,145 @@ fn lane_uniform(p: &Program, st: &Structured, all: &[bool]) -> HashSet<Value> {
 /// Whether `v` is the same in every lane of its console wave in the
 /// surrounding control flow: constants, scalar reads, and lane operations
 /// whose inputs all are, through loop-carried phis. An LDS read at a
-/// uniform address counts: every lane asks for the same dword (the shader
-/// uses this for a wave's running scan).
-fn value_uniform(p: &Program, st: &Structured, v: Value, seen: &mut HashSet<Value>) -> bool {
-    if !seen.insert(v) {
-        // A loop-carried value: its non-cyclic inputs decide, and those are
-        // checked by the caller's phi arm.
-        return true;
-    }
-    for block in &p.blocks {
-        for phi in &block.phis {
-            if phi.value == v {
-                return phi
-                    .args
-                    .iter()
-                    .all(|&a| value_uniform(p, st, a, seen));
-            }
-        }
-        for inst in &block.insts {
-            if !inst.writes.iter().any(|&(_, w)| w == v) {
-                continue;
-            }
-            let name = inst.name();
-            let scalar_ok = |x: Value| !st.masks.contains_key(&x) && !st.highs.contains_key(&x);
-            let operand_ok = |op: &Operand, seen: &mut HashSet<Value>| match *op {
-                Operand::Vector { reg, .. } => inst
-                    .read(Reg::V(reg))
-                    .is_some_and(|x| value_uniform(p, st, x, seen)),
-                Operand::Scalar { code, .. } => inst
-                    .read(Reg::S(code))
-                    .is_none_or(&scalar_ok),
-                _ => true,
-            };
-            if name.starts_with("ds_read") {
-                // The address is uniform, so every lane reads that dword.
-                let Fields::Ds { addr, .. } = &inst.fields else {
-                    return false;
-                };
-                return addr
-                    .as_ref()
-                    .is_none_or(|a| operand_ok(a, seen));
-            }
-            if name.starts_with("v_mbcnt") || name.contains("lane") || name.starts_with("v_cmpx") {
-                return false;
-            }
-            let Fields::Valu(val) = &inst.fields else {
-                return false;
-            };
-            return val.src.iter().all(|op| operand_ok(op, seen));
-        }
-    }
-    false
+/// uniform address counts only while no later LDS write can intervene:
+/// every lane asks for the same dword, but both halves must observe the
+/// same write (the shader uses this for a wave's running scan).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Uniform {
+    Yes,
+    No,
+    /// Only reachable through the value being checked (a loop back edge).
+    Cycle,
 }
+
+fn lds_stable(p: &Program, at: usize) -> bool {
+    p.blocks.iter().skip(at).all(|b| {
+        b.insts
+            .iter()
+            .all(|i| !i.name().starts_with("ds_") || i.name().starts_with("ds_read"))
+    })
+}
+
+fn operand_uniform(
+    p: &Program,
+    st: &Structured,
+    at: usize,
+    inst: &Inst,
+    op: &Operand,
+    path: &mut HashSet<Value>,
+) -> Uniform {
+    match *op {
+        Operand::Vector { reg, .. } => inst
+            .read(Reg::V(reg))
+            .map_or(Uniform::No, |x| value_uniform(p, st, at, x, path)),
+        Operand::Scalar { code, .. } => inst
+            .read(Reg::S(code))
+            .filter(|x| st.masks.contains_key(x) || st.highs.contains_key(x))
+            .map_or(Uniform::Yes, |_| Uniform::No),
+        _ => Uniform::Yes,
+    }
+}
+
+fn value_uniform(
+    p: &Program,
+    st: &Structured,
+    at: usize,
+    v: Value,
+    path: &mut HashSet<Value>,
+) -> Uniform {
+    if !path.insert(v) {
+        return Uniform::Cycle;
+    }
+    let mut result = Uniform::No;
+    'find: {
+        for block in &p.blocks {
+            for phi in &block.phis {
+                if phi.value != v {
+                    continue;
+                }
+                let (mut yes, mut cycle) = (false, false);
+                for &a in &phi.args {
+                    match value_uniform(p, st, at, a, path) {
+                        Uniform::No => {
+                            result = Uniform::No;
+                            break 'find;
+                        }
+                        Uniform::Yes => yes = true,
+                        Uniform::Cycle => cycle = true,
+                    }
+                }
+                // A loop's back edge alone is not a seed; at least one
+                // incoming value must come from outside the cycle.
+                result = if yes {
+                    Uniform::Yes
+                } else if cycle {
+                    Uniform::Cycle
+                } else {
+                    Uniform::Yes
+                };
+                break 'find;
+            }
+            for inst in &block.insts {
+                if !inst.writes.iter().any(|&(_, w)| w == v) {
+                    continue;
+                }
+                let name = inst.name();
+                if name.starts_with("ds_read") {
+                    if !lds_stable(p, at) {
+                        result = Uniform::No;
+                        break 'find;
+                    }
+                    let Fields::Ds { addr, .. } = &inst.fields else {
+                        result = Uniform::No;
+                        break 'find;
+                    };
+                    result = addr
+                        .as_ref()
+                        .map_or(Uniform::Yes, |a| operand_uniform(p, st, at, inst, a, path));
+                    break 'find;
+                }
+                if name.starts_with("v_mbcnt")
+                    || name.contains("lane")
+                    || name.starts_with("v_cmpx")
+                {
+                    result = Uniform::No;
+                    break 'find;
+                }
+                let Fields::Valu(val) = &inst.fields else {
+                    result = Uniform::No;
+                    break 'find;
+                };
+                if val.dpp.is_some() || val.sdwa.is_some() {
+                    result = Uniform::No;
+                    break 'find;
+                }
+                let mut yes = false;
+                let mut cycle = false;
+                for op in &val.src {
+                    match operand_uniform(p, st, at, inst, op, path) {
+                        Uniform::No => {
+                            result = Uniform::No;
+                            break 'find;
+                        }
+                        Uniform::Yes => yes = true,
+                        Uniform::Cycle => cycle = true,
+                    }
+                }
+                result = if yes {
+                    Uniform::Yes
+                } else if cycle {
+                    Uniform::Cycle
+                } else {
+                    Uniform::Yes
+                };
+                break 'find;
+            }
+        }
+    }
+    path.remove(&v);
+    result
+}
+
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Wave {
@@ -1432,6 +1519,7 @@ impl<'a> Lower<'a> {
                 let n = i.name();
                 n.starts_with("ds_swizzle")
                     || n.contains("permute")
+                    || n.starts_with("v_permlane")
                     || n.starts_with("v_mbcnt")
                     || matches!(n, "v_readlane_b32" | "v_writelane_b32")
                     || matches!(&i.fields, Fields::Valu(v) if v.dpp.is_some())
@@ -8075,7 +8163,13 @@ impl<'a> Lower<'a> {
                 };
                 let alike = src.is_some_and(|x| {
                     self.uniform.contains(&x)
-                        || value_uniform(self.x.p, self.x.st, x, &mut HashSet::new())
+                        || value_uniform(
+                            self.x.p,
+                            self.x.st,
+                            self.cur_ir,
+                            x,
+                            &mut HashSet::new(),
+                        ) == Uniform::Yes
                 });
                 let halves = self.exchange.as_ref().is_some_and(|e| !e.1) && !self.local;
                 let r = if halves && !alike {
@@ -11353,6 +11447,74 @@ mod tests {
             base_register: 0,
             user_data,
             slot,
+        }
+    }
+
+    /// `v_permlane16_b32` / `v_permlanex16_b32` read other lanes, so a
+    /// compute program using them runs in the console's lane order (here
+    /// the only cross-lane instruction, which once went unnoticed: their
+    /// names say `permlane`, not `permute`).
+    #[test]
+    fn permlanes_ask_for_console_lanes() {
+        for op in [0x377u32, 0x378] {
+            let words = [
+                0xBE85_0380, // s_mov_b32 s5, 0
+                0xF408_0202, // s_load_dwordx4 s[8:11], s[4:5], 0
+                0xFA00_0000,
+                0x7E02_0200,            // v_mov_b32 v1, s0
+                0xD400_0000 | op << 16, // v_permlane(x)16_b32 v0, v1, s1, s2
+                0x0008_0301,
+                0xE070_0000, // buffer_store_dword v0, off, s[8:11], 0
+                0x8002_0000,
+                S_ENDPGM,
+            ];
+            let constants = RootParam {
+                sgprs: 4,
+                ..root(RootType::Constants, 0, 0)
+            };
+            let buffer = UsedResource {
+                kind: ResourceType::Uav,
+                root: RootType::Table,
+                table_offset_dwords: 0,
+                lower_bound: 0,
+                stride: 0,
+                dwords: 4,
+                user_data: 4,
+                slot: 1,
+            };
+            // Two console waves per group, no LDS: only the permlane asks
+            // for the console's lanes.
+            let native = NativeProgram {
+                stage: HwStage::Cs,
+                wave64: false,
+                vgprs: 256,
+                layout: vec![constants, root(RootType::Table, 4, 1)],
+                used: vec![buffer],
+                io: StageIo::Cs(ComputeIo {
+                    rsrc2: 5 << 1,
+                    threads: [64, 1, 1],
+                }),
+                code: words.iter().flat_map(|w| w.to_le_bytes()).collect(),
+            };
+            let p = ir::build(&native.code, false, 256).unwrap();
+            let st = structure::structure(&p).unwrap();
+            let res = resource::track(&p, &native.layout, native.stage, Some(&st)).unwrap();
+            let io = io::raise(&p, &native).unwrap();
+            let lowered = lower(&Parts {
+                native: &native,
+                p: &p,
+                st: &st,
+                io: &io,
+                res: &res,
+                inputs: vec![],
+                outputs: vec![],
+                prims: vec![],
+                mesh_stride: 0,
+            })
+            .unwrap_or_else(|e| panic!("VOP3 {op:#x}: {e}"));
+            assert!(lowered.wave_ops, "VOP3 {op:#x}: no wave operations");
+            // The host runs it in waves of the console's size.
+            assert_eq!(lowered.wave_size, Some(32), "VOP3 {op:#x}");
         }
     }
 
