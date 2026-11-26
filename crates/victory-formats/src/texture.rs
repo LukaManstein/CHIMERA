@@ -454,14 +454,19 @@ impl Layout {
             let mut sizes = vec![];
             for i in 0..d.mips {
                 let (w, h) = padded(i);
-                if w <= fixed[0] && h <= fixed[1] && d.mips - i <= max_in_tail {
+                let depth = mip_depth(i);
+                // A thick tail must fit in the first depth slab too
+                // (addrlib's GetMipChainInfo; upstream 2ffa6ca by
+                // geiyiliyabumo): a deep 3D mip entered it by its width and
+                // height alone, and the mips after it were read astray.
+                if w <= fixed[0] && h <= fixed[1] && (!thick || depth <= fixed[2]) && d.mips - i <= max_in_tail {
                     first_tail_mip = i;
                     slice_size += block_bytes / u64::from(block[2]);
                     break;
                 }
                 let pitch = w.next_multiple_of(block[0]);
                 let rows = h.next_multiple_of(block[1]);
-                let depth = mip_depth(i).next_multiple_of(block[2]);
+                let depth = depth.next_multiple_of(block[2]);
                 let one = u64::from(pitch) * u64::from(rows) * bpe;
                 slice_size += one;
                 sizes.push(one * u64::from(block[2]));
