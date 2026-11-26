@@ -18,8 +18,6 @@ set VICTORY_MERGE_RUNS=4096
 rem --- older switches of the fork ---
 set VICTORY_LATE_WAIT=3
 set VICTORY_WIDE_BACK=1
-set VICTORY_CARD_BUFFERS_MIN_MB=1
-set VICTORY_CARD_BUFFERS_MB=1024
 rem leave more of the 12 GB card to textures (default keeps 3 GB for targets; textures waited and drew black)
 set VICTORY_CARD_ROOM_FOR_TARGETS_MB=2048
 rem at most 128 MB of textures staged a frame (192 by default): smoother frames while an area streams in
@@ -65,10 +63,23 @@ rem NVIDIA caps the view heap: the dynamic slot pool may take up to half (trustn
 set VICTORY_DYNAMIC_SLOTS=524288
 rem the bindless-texture pass on its own thread (760 ms a frame on the recording thread without it)
 set VICTORY_HEAP_WORKER=1
+rem --- fork survey 2026-11-26 ---
+rem hold the title's GPU heap defrag shader: its moves left coloured blocks and stale textures (SPOOKEXE 66af26c0)
+set VICTORY_SKIP_PIPELINES=02384a60fda6f2d0
+rem a fill that reads ahead of a flight waits for it (the 2 KiB race fired in our log; blurred ovals)
+set VICTORY_FILL_WAIT=1
+rem buffer host-copy lookups answered from a cache (fxceless run 293: -14 ms a frame)
+set VICTORY_LOOKUP_CACHE=1
+rem from fxceless best-playing set (run 279)
+set VICTORY_CARD_HASH_LEN=1
+rem smaller buffers compared on the card too (card work 68 -> 50 ms a frame)
+set VICTORY_CARD_BUFFERS_MIN_KB=64
+set VICTORY_CARD_BUFFERS_MB=1280
+
 if "%1"=="warm" (
-  rem warm-up keys must match the device: wave32 lanes and the NVIDIA view heap cap (RTX 20xx-50xx)
+  rem warm-up keys must match the device: wave32 lanes and the NVIDIA view heap cap minus the null slot (RTX 20xx-50xx)
   set VICTORY_HOST_WAVE=32
-  set VICTORY_VIEW_LIMIT=1000000
+  set VICTORY_VIEW_LIMIT=999999
   target\release\victory.exe warm --jobs 16 "%GAME%\shaders.rpf"
   goto :eof
 )

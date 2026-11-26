@@ -141,7 +141,7 @@ Branch `chimera-batch10` = `next-nvidia` plus:
 - `VICTORY_HEAP_WORKER=1`: the pass over textures picked by index runs on its own thread
   (it took ~760 ms a frame on the recording thread in 3D scenes);
 - `scripts\chimera-batch10.cmd warm` warms the shader cache with the device's keys
-  (`VICTORY_HOST_WAVE=32`, `VICTORY_VIEW_LIMIT=1000000` on NVIDIA);
+  (`VICTORY_HOST_WAVE=32`, `VICTORY_VIEW_LIMIT=999999` on NVIDIA: the heap cap minus the null slot);
 - `scripts\chimera-launcher.ps1`: a window with the warm-up progress, then the game and its frame rate.
 
 Measured (Ryzen 7 2700 + RTX 3080 Ti, Windows 10 LTSC, 720p): menus 30 fps; 3D scenes 2-6 fps and
