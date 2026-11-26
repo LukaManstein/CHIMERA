@@ -6,6 +6,7 @@
 |---|---|---|
 | **NVIDIA** RTX 20xx / 30xx / 40xx / 50xx | **CHIMERA (NVIDIA) — `stable-nvidia-…` release** | tested builds; the installer and the shortcut use these |
 | NVIDIA, want the newest | branch `next-nvidia` (= `turbo-next`) | today's work, not yet tested as long |
+| NVIDIA, testing | branch `chimera-batch10` | experimental: texture-format fixes + Nitric Acid's shader work, launcher with progress; see [CHIMERA batch10](#chimera-batch10-experimental) |
 | **AMD** Radeon | not CHIMERA for now: [Belobug/VIctory-Belobug-AMD](https://github.com/Belobug/VIctory-Belobug-AMD) | CHIMERA has not been run on AMD |
 
 ## The easy way: installer + desktop shortcut
@@ -126,3 +127,32 @@ All of them are in `scripts\chimera-turbo.cmd` and can be turned off one by one
 from fxceless/victory-fork, the shader fixes from uiliannn/VItoriaBr, the boat
 fix from Geckomacabre/vx-layer, the ambient light from Belobug; see the README's
 credits.
+
+## CHIMERA batch10 (experimental)
+
+Branch `chimera-batch10` = `next-nvidia` plus:
+
+- texture formats: BCPack BC7, depth pitch of 3D textures, thick 3D mip tails;
+- from [Nitric Acid's VIctory-Omega](https://github.com/NitricAcidDev/VIctory-Omega-Fork): the paired wave64
+  form (7 compute shaders the NVIDIA driver refused), mesh+pixel linking, geometry shaders
+  (GS_Voxelize) and their pipelines, per-stage loop limits, dispatches past 65,535 groups,
+  normalized buffer formats, texture streaming fixes (late blocks, remapped memory, retries),
+  sRGB on compressed materials, CBV tables on replay;
+- `VICTORY_HEAP_WORKER=1`: the pass over textures picked by index runs on its own thread
+  (it took ~760 ms a frame on the recording thread in 3D scenes);
+- `scripts\chimera-batch10.cmd warm` warms the shader cache with the device's keys
+  (`VICTORY_HOST_WAVE=32`, `VICTORY_VIEW_LIMIT=1000000` on NVIDIA);
+- `scripts\chimera-launcher.ps1`: a window with the warm-up progress, then the game and its frame rate.
+
+Measured (Ryzen 7 2700 + RTX 3080 Ti, Windows 10 LTSC, 720p): menus 30 fps; 3D scenes 2-6 fps and
+**unstable** (median frame 170-200 ms, spikes to 1 s). Known problems being worked on: shaders still
+translated during play after a warm-up, CPU-bound submission (the card is 6-16% busy), texture
+artifacts ("a texture picked by index changed after its upload"). Not a release: use `stable-nvidia`
+to play.
+
+```bat
+git checkout chimera-batch10
+cargo build --release
+scripts\chimera-batch10.cmd warm
+powershell -ExecutionPolicy Bypass -File scripts\chimera-launcher.ps1
+```
